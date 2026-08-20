@@ -1,0 +1,13 @@
+{
+  "name": "spn-erp",
+  "version": "1.0.0",
+  "private": true,
+  "description": "SPN Savannah Propagation Nursery ERP - Cloudflare full-stack app",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}

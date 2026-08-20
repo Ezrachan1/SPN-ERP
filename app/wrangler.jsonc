@@ -1,0 +1,37 @@
+{
+	// SPN ERP: Cloudflare Worker serving the SPA + JSON API on a D1 database.
+	// 1) npx wrangler d1 create spn-erp
+	// 2) paste the returned database_id below
+	// 3) npx wrangler deploy
+	// First visit walks you through creating the Super User account.
+	"name": "spn-erp",
+	"main": "src/worker.js",
+	"compatibility_date": "2026-01-01",
+	"assets": {
+		"directory": "./public",
+		"binding": "ASSETS"
+	},
+	"d1_databases": [
+		{
+			"binding": "SPN_DB",
+			"database_name": "spn-erp",
+			"database_id": "47459544-37a9-4b6b-841e-62a9fc105c8e"
+		},
+		{
+			"binding": "spn_erp",
+			"database_name": "spn-erp",
+			"database_id": "47459544-37a9-4b6b-841e-62a9fc105c8e"
+		}
+	],
+	// Email invitations: the app can send invitation emails itself once a
+	// sending domain is onboarded on your Cloudflare account:
+	//   1) npx wrangler email sending enable yourdomain.com   (needs a domain on Cloudflare)
+	//   2) set EMAIL_FROM below to an address on that domain, e.g. invites@yourdomain.com
+	//   3) npx wrangler deploy
+	// Until EMAIL_FROM is set, invitations fall back to a shareable link.
+	"send_email": [{ "name": "SPN_EMAIL" }],
+	"vars": {
+		"EMAIL_FROM": "",
+		"EMAIL_FROM_NAME": ""
+	}
+}
