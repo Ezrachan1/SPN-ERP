@@ -60,6 +60,7 @@ async function ensureSchema(env) {
     env.SPN_DB.prepare('CREATE TABLE IF NOT EXISTS collections (name TEXT PRIMARY KEY, json TEXT NOT NULL, updated_at INTEGER)'),
     env.SPN_DB.prepare('CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, user_id TEXT NOT NULL, expires_at INTEGER NOT NULL)'),
     env.SPN_DB.prepare('CREATE TABLE IF NOT EXISTS invites (token TEXT PRIMARY KEY, role TEXT, created_by TEXT, created_at INTEGER, expires_at INTEGER, used_by TEXT)'),
+    env.SPN_DB.prepare('CREATE TABLE IF NOT EXISTS files (id TEXT PRIMARY KEY, owner TEXT, mime TEXT, data TEXT NOT NULL, size INTEGER, created_at INTEGER)'),
   ]);
   /* migration: invites gained an email column for emailed invitations */
   try { await env.SPN_DB.prepare('ALTER TABLE invites ADD COLUMN email TEXT').run(); } catch (e) {}
@@ -231,6 +232,17 @@ export default {
         return json({ valid, role: valid ? inv.role : null, email: valid ? (inv.email || null) : null });
       }
 
+      /* stored images (livestock photos): downscaled client-side, kept in D1.
+         GET is unauthenticated so <img> tags can load them; ids are long random
+         tokens, which is the access control for these non-sensitive farm photos. */
+      if (route.startsWith('files/') && req.method === 'GET') {
+        const id = route.slice('files/'.length);
+        const row = await env.SPN_DB.prepare('SELECT mime, data FROM files WHERE id = ?').bind(id).first();
+        if (!row) return json({ error: 'Not found' }, 404);
+        const bytes = Uint8Array.from(atob(row.data), c => c.charCodeAt(0));
+        return new Response(bytes, { headers: { 'Content-Type': row.mime || 'image/jpeg', 'Cache-Control': 'private, max-age=86400' } });
+      }
+
       if (route === 'login' && req.method === 'POST') {
         const body = await req.json().catch(() => ({}));
         const userId = String(body.userId || '');
@@ -288,6 +300,21 @@ export default {
         const { hash, salt } = await makePassword(password);
         await env.SPN_DB.prepare('UPDATE users SET pass_hash = ?, pass_salt = ?, must_change = 1, updated_at = ? WHERE id = ?')
           .bind(hash, salt, Date.now(), userId).run();
+        return json({ ok: true });
+      }
+
+      if (route === 'files' && req.method === 'POST') {
+        const body = await req.json().catch(() => ({}));
+        const data = String(body.data || '');
+        if (!data || data.length > 900000) return json({ error: 'Image missing or too large (max ~650 KB after downscaling)' }, 413);
+        const mime = /^image\/(jpeg|png|webp)$/.test(String(body.mime || '')) ? body.mime : 'image/jpeg';
+        const id = crypto.randomUUID().replace(/-/g, '') + crypto.randomUUID().slice(0, 8);
+        await env.SPN_DB.prepare('INSERT INTO files (id, owner, mime, data, size, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+          .bind(id, session.userId, mime, data, data.length, Date.now()).run();
+        return json({ ok: true, id });
+      }
+      if (route.startsWith('files/') && req.method === 'DELETE') {
+        await env.SPN_DB.prepare('DELETE FROM files WHERE id = ?').bind(route.slice('files/'.length)).run();
         return json({ ok: true });
       }
 
@@ -381,6 +408,7 @@ export default {
             env.SPN_DB.prepare('DELETE FROM collections'),
             env.SPN_DB.prepare('DELETE FROM sessions'),
             env.SPN_DB.prepare('DELETE FROM invites'),
+            env.SPN_DB.prepare('DELETE FROM files'),
             env.SPN_DB.prepare('DELETE FROM users'),
           ]);
           return json({ ok: true, mode: 'factory' });

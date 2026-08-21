@@ -130,6 +130,13 @@ works locally too.
 | PUT    | /api/users              | Admin     | Replace user list (auth columns preserved)    |
 | POST   | /api/reset              | SuperUser | `{mode:'operational'|'factory'}`              |
 | POST   | /api/ai                 | Bearer    | Proxy to the Anthropic Messages API           |
+| POST   | /api/files              | Bearer    | Store a downscaled image (livestock photos)   |
+| GET    | /api/files/:id          | none**    | Serve a stored image                          |
+| DELETE | /api/files/:id          | Bearer    | Remove a stored image                         |
+| POST   | /api/activity           | Bearer    | Server-merged per-user activity increment     |
+
+**Image GETs are unauthenticated so `<img>` tags can load them; the ids are long
+random tokens, which is the access control for these non-sensitive farm photos.
 
 *`/api/setup` refuses once any user exists.
 
