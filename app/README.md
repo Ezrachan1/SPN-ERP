@@ -32,6 +32,14 @@ letterheaded reports, role-based access and a full audit log.
 - **First-run setup**: the first visit to a fresh deployment walks you
   through creating the System Super User and the organisation profile, then
   offers a clean start or a demo dataset.
+- **Farm plots**: fields with crop, variety, area, date of planting, a live
+  crop-day counter, FAO-56 development stage, expected harvest and rainfall
+  since planting; one click hands a plot to the irrigation calculator.
+- **Rain gauge**: actual rainfall received (mm) logged per event, with weekly,
+  monthly and year-to-date totals feeding the farm report.
+- **Report viewers**: reports are visible by role, and admins can additionally
+  grant individual users viewing rights per report (the Farm Plots report is
+  assignment-only by default).
 - **Responsive**: off-canvas sidebar with a hamburger toggle on mobile; on
   desktop the same toggle detaches or docks the sidebar (preference saved).
 

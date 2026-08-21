@@ -40,15 +40,16 @@ const PBKDF2_ITERATIONS = 10000;
 const LEGACY_ITERATIONS = 100000;
 
 const COLLECTIONS = [
-  'departments', 'staff', 'consumables', 'seedlingStock', 'sowingRecords',
-  'cashSales', 'procurement', 'requisitions', 'leads', 'auditLog',
-  'reportsAccessList', 'accessRequests', 'aiScans', 'weatherLocation',
+  'departments', 'staff', 'consumables', 'seedlingStock', 'livestockInventory',
+  'farmPlots', 'rainfallLog', 'reportAccess',
+  'sowingRecords', 'cashSales', 'procurement', 'requisitions', 'leads', 'auditLog',
+  'reportsAccessList', 'accessRequests', 'aiScans', 'activityStats', 'weatherLocation',
   'salesHistory', 'priceHistory', 'companyKraPin', 'leadsMonthlyTarget', 'org',
 ];
 const OPERATIONAL = [
-  'staff', 'consumables', 'seedlingStock', 'sowingRecords', 'cashSales',
-  'procurement', 'requisitions', 'leads', 'auditLog', 'accessRequests',
-  'aiScans', 'salesHistory', 'priceHistory',
+  'staff', 'consumables', 'seedlingStock', 'livestockInventory', 'farmPlots', 'rainfallLog',
+  'sowingRecords', 'cashSales', 'procurement', 'requisitions', 'leads', 'auditLog',
+  'accessRequests', 'aiScans', 'activityStats', 'salesHistory', 'priceHistory',
 ];
 
 let schemaReady = false;
@@ -169,7 +170,10 @@ export default {
           return { id: u.id, name: u.name, role: u.role, designation: u.designation, status: u.status || 'Active', hasPassword: !!r.pass_hash };
         });
         const orgRow = await env.SPN_DB.prepare('SELECT json FROM collections WHERE name = ?').bind('org').first();
-        return json({ setup: users.length > 0, users, org: orgRow ? JSON.parse(orgRow.json) : null });
+        const deptRow = await env.SPN_DB.prepare('SELECT json FROM collections WHERE name = ?').bind('departments').first();
+        let departments = [];
+        if (deptRow) { try { departments = JSON.parse(deptRow.json) || []; } catch (e) {} }
+        return json({ setup: users.length > 0, users, org: orgRow ? JSON.parse(orgRow.json) : null, departments });
       }
 
       if (route === 'setup' && req.method === 'POST') {
@@ -285,6 +289,18 @@ export default {
         await env.SPN_DB.prepare('UPDATE users SET pass_hash = ?, pass_salt = ?, must_change = 1, updated_at = ? WHERE id = ?')
           .bind(hash, salt, Date.now(), userId).run();
         return json({ ok: true });
+      }
+
+      if (route === 'activity' && req.method === 'POST') {
+        /* server-merged per-user activity counter: increments never clobber other users */
+        const body = await req.json().catch(() => ({}));
+        const inc = Math.max(0, Math.min(1000, Math.round(+body.inc || 0)));
+        const row = await env.SPN_DB.prepare('SELECT json FROM collections WHERE name = ?').bind('activityStats').first();
+        let stats = {};
+        if (row) { try { stats = JSON.parse(row.json) || {}; } catch (e) {} }
+        stats[session.userId] = (stats[session.userId] || 0) + inc;
+        await putCollection(env, 'activityStats', JSON.stringify(stats));
+        return json({ ok: true, total: stats[session.userId] });
       }
 
       if (route === 'invites' && req.method === 'POST') {
