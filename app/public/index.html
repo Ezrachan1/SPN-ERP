@@ -64,7 +64,7 @@
   --font-mono:'JetBrains Mono',ui-monospace,monospace;
 }
 *{box-sizing:border-box;}
-html,body{margin:0;padding:0;height:100%;}
+html,body{margin:0;padding:0;height:100%;overscroll-behavior-y:none;}
 body{
   font-family:var(--font-ui);
   background:var(--bg);
@@ -150,18 +150,24 @@ a{color:var(--gold-deep);}
 .login-foot{margin-top:18px;font-size:11px;color:var(--faint);line-height:1.6;}
 
 /* ==================== APP SHELL - enterprise layer ==================== */
-#app{display:none;height:100vh;}
-.shell{display:grid;grid-template-columns:246px 1fr;height:100vh;}
+/* The shell is exactly one viewport tall and only #sb-nav and #view-root scroll.
+   grid-template-rows:minmax(0,1fr) + min-height:0 on the two grid items stop the
+   main column from growing to its content (grid items default to min-height:auto),
+   which used to make the whole document scroll, push the sidebar out of view and
+   snap the page back to the top on every re-render. 100dvh keeps mobile browsers
+   with a collapsing URL bar from producing a second, page-level scroll. */
+#app{display:none;height:100vh;height:100dvh;}
+.shell{display:grid;grid-template-columns:246px 1fr;grid-template-rows:minmax(0,1fr);height:100vh;height:100dvh;}
 .sidebar{
   background:var(--forest-deep);color:#C6D0BE;
-  display:flex;flex-direction:column;overflow:hidden;
+  display:flex;flex-direction:column;overflow:hidden;min-height:0;
 }
 .sb-brand{display:flex;align-items:center;gap:10px;padding:18px 18px 16px;border-bottom:1px solid rgba(255,255,255,0.07);flex:none;}
 .sb-brand .logo-tile{background:#F5F2E8;border-radius:9px;padding:3px;display:flex;align-items:center;justify-content:center;width:34px;height:34px;flex:none;}
 .sb-brand .logo-tile img{width:28px;display:block;}
 .sb-brand div b{display:block;color:#F0EEE2;font-family:var(--font-display);font-size:15.5px;line-height:1.15;font-weight:700;}
 .sb-brand div span{font-size:9.5px;letter-spacing:.12em;color:var(--sage-light);text-transform:uppercase;font-weight:600;}
-#sb-nav{flex:1;overflow-y:auto;padding:6px 0 10px;}
+#sb-nav{flex:1;overflow-y:auto;overscroll-behavior:contain;padding:6px 0 10px;}
 #sb-nav::-webkit-scrollbar-thumb{background:rgba(255,255,255,.14);border:none;}
 .sb-group{padding:12px 12px 2px;}
 .sb-label{font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:#7C8B74;padding:4px 10px 6px;font-weight:600;}
@@ -176,7 +182,7 @@ a{color:var(--gold-deep);}
 .sb-item.locked{opacity:.38;}
 .sb-foot{flex:none;padding:13px 18px;border-top:1px solid rgba(255,255,255,0.07);font-size:10.6px;color:#7C8B74;line-height:1.5;}
 
-.main{display:flex;flex-direction:column;min-width:0;background:var(--bg);}
+.main{display:flex;flex-direction:column;min-width:0;min-height:0;background:var(--bg);}
 .topbar{
   height:60px;background:var(--surface);border-bottom:1px solid var(--line);
   display:flex;align-items:center;justify-content:space-between;padding:0 24px;flex:none;gap:14px;
@@ -201,7 +207,7 @@ a{color:var(--gold-deep);}
 .logout-btn{background:none;border:1px solid var(--line);border-radius:8px;padding:7px 12px;font-size:11.5px;color:var(--muted);font-weight:500;transition:.13s;}
 .logout-btn:hover{border-color:var(--danger);color:var(--danger);}
 
-#view-root{flex:1;overflow-y:auto;padding:22px 26px 64px;}
+#view-root{flex:1;overflow-y:auto;overscroll-behavior:contain;padding:22px 26px 64px;}
 .view-header{display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:18px;flex-wrap:wrap;gap:12px;}
 .view-header h2{margin:0;font-size:23px;color:var(--forest-deep);font-weight:700;}
 .view-header p{margin:3px 0 0;color:var(--muted);font-size:12.5px;max-width:88ch;line-height:1.5;}
@@ -374,7 +380,7 @@ table:not(.dtable) tbody tr:hover{background:var(--mint-soft);}
 .drawer-head{padding:18px 22px 14px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:flex-start;gap:10px;}
 .drawer-head h3{margin:0;font-size:17px;color:var(--forest-deep);font-family:var(--font-display);}
 .drawer-head .dh-sub{font-size:11.5px;color:var(--muted);margin-top:3px;}
-.drawer-body{flex:1;overflow-y:auto;padding:18px 22px;}
+.drawer-body{flex:1;overflow-y:auto;overscroll-behavior:contain;padding:18px 22px;}
 .drawer-foot{padding:14px 22px;border-top:1px solid var(--line);display:flex;gap:9px;flex-wrap:wrap;}
 .spec-list{display:grid;grid-template-columns:auto 1fr;gap:7px 16px;font-size:12.5px;}
 .spec-list dt{color:var(--muted);font-weight:500;margin:0;}
@@ -546,7 +552,11 @@ table:not(.dtable) tbody tr:hover{background:var(--mint-soft);}
 .nav-toggle svg{width:17px;height:17px;}
 .sb-scrim{display:none;position:fixed;inset:0;background:rgba(30,43,34,.45);z-index:240;}
 body.sb-collapsed .shell{grid-template-columns:1fr;}
-body.sb-collapsed .sidebar{display:none;}
+/* Collapsed sidebar stays rendered off-screen (not display:none) so the nav list
+   keeps its scroll position and active item when it is docked again. */
+@media(min-width:881px){
+  body.sb-collapsed .sidebar{position:fixed;top:0;bottom:0;left:0;width:246px;transform:translateX(-110%);visibility:hidden;pointer-events:none;}
+}
 
 /* ---------- Mobile overhaul ---------- */
 @media(max-width:880px){
@@ -1121,10 +1131,18 @@ window.addEventListener('focus', async ()=>{
   lastFocusSync = Date.now();
   try{
     const uidNow = CURRENT.id;
+    const snapshot = ()=>JSON.stringify([DATA.users, ...COLLECTION_KEYS.map(k=>DATA[k])]);
+    const before = snapshot(), accessBefore = JSON.stringify(CURRENT.access);
     await loadServerState();
     CURRENT = DATA.users.find(u=>u.id===uidNow) || CURRENT;
-    const key = document.querySelector('.sb-item.active')?.dataset.key;
-    if(key) nav(key);
+    /* Only redraw when the server actually had something new, and then in place:
+       an unchanged page must not jump or lose half-typed inputs just because the
+       tab was focused again. */
+    if(JSON.stringify(CURRENT.access)!==accessBefore) buildSidebar();
+    if(snapshot()!==before){
+      const key = document.querySelector('.sb-item.active')?.dataset.key;
+      if(key) nav(key, {keepScroll:true});
+    }
   }catch(e){}
 });
 
@@ -1451,7 +1469,10 @@ function login(userId, resumed){
   if(!resumed) logActivity(`${CURRENT.name} signed in (${CURRENT.role}).`);
   try{ if(localStorage.getItem('spn_sb_collapsed')==='1') document.body.classList.add('sb-collapsed'); }catch(e){}
   buildSidebar();
-  nav(CURRENT.access.includes('dashboard') ? 'dashboard' : (CURRENT.access[0] || 'dashboard'));
+  /* reopen the module in the URL hash after a reload / app re-entry when the user may see it */
+  const wanted = (location.hash||'').replace('#','');
+  const first = CURRENT.access.includes('dashboard') ? 'dashboard' : (CURRENT.access[0] || 'dashboard');
+  nav((wanted && (wanted==='profile' || CURRENT.access.includes(wanted))) ? wanted : first);
   loadWeatherChip();
 }
 function logout(){
@@ -1469,6 +1490,7 @@ function logout(){
 
 function buildSidebar(){
   const nav_ = document.getElementById('sb-nav');
+  const keepTop = nav_.scrollTop; /* rebuilding the list must not lose the user's place in it */
   /* restricted modules are hidden entirely; access is requested through one modal */
   const lockedCount = ALL_MODULE_KEYS.filter(k=>!CURRENT.access.includes(k)).length;
   nav_.innerHTML = MODULES.map(g=>{
@@ -1479,6 +1501,9 @@ function buildSidebar(){
       ${items.map(it=>`<div class="sb-item" data-key="${it.key}" onclick="nav('${it.key}')">${ICONS[it.icon]}<span>${it.label}</span></div>`).join('')}
     </div>`;
   }).join('') + (lockedCount? `<div class="sb-group"><div class="sb-item" style="opacity:.72;" onclick="openRequestAccessModal()">${ICONS.access}<span>Request access · ${lockedCount} more</span></div></div>` : '');
+  nav_.scrollTop = keepTop;
+  const activeKey = document.getElementById('view-root')?.dataset.view;
+  if(activeKey) nav_.querySelectorAll('.sb-item').forEach(el=>el.classList.toggle('active', el.dataset.key===activeKey));
   /* organisation branding is editable in Users & Access */
   const org = orgProfile();
   const regionEl = document.querySelector('.sb-brand div span');
@@ -1499,6 +1524,7 @@ function toggleSidebar(){
 }
 function closeMobileSidebar(){ document.body.classList.remove('sb-open'); }
 function openRequestAccessModal(){
+  closeMobileSidebar(); /* on phones the modal would otherwise open behind the open sidebar and its scrim */
   const locked = MODULES.flatMap(g=>g.items).filter(it=>!CURRENT.access.includes(it.key));
   openModal('Request module access', `
     <p style="margin:0 0 12px;font-size:12.7px;line-height:1.6;">Modules outside your access are hidden from your navigation. Send a request and the Admin/MD will see it in their approvals queue.</p>
@@ -1543,13 +1569,16 @@ const VIEW_TITLES = {
   audit:['Audit Log','Full traceability of system activity'],
   profile:['My Profile','Account details'],
 };
-function nav(key){
+/* nav(key, {keepScroll:true}) re-renders the current module in place (used by the
+   background refresh and access changes) without sending the reader back to the top. */
+function nav(key, opts){
   /* single choke point for module access: hidden modules stay unreachable even
      through ambient entry points (weather chip, dashboard cards, search) */
   if(CURRENT && key!=='profile' && !CURRENT.access.includes(key)){
     toast('You do not have access to that module. Use "Request access" in the sidebar.','err');
     return;
   }
+  const keepScroll = !!(opts && opts.keepScroll);
   closeDrawer(); closeRowMenu();
   if(typeof closeMobileSidebar === 'function') closeMobileSidebar();
   if(typeof closeBellPanel === 'function') closeBellPanel();
@@ -1558,7 +1587,6 @@ function nav(key){
   const t = VIEW_TITLES[key] || ['',''];
   document.getElementById('tb-title').innerHTML = t[0]+'<small>'+t[1]+'</small>';
   const root = document.getElementById('view-root');
-  root.scrollTop = 0;
   const renderers = {
     dashboard:renderDashboard, cashsale:renderCashSale, leads:renderLeads, leadsmap:renderLeadsMap,
     salesanalytics:renderSalesAnalytics, sowing:renderSowing,
@@ -1567,8 +1595,84 @@ function nav(key){
     requisitions:renderRequisitions, reports:renderReports, departments:renderDepartments, access:renderAccess, audit:renderAudit,
     profile:renderProfile,
   };
-  (renderers[key]||renderDashboard)(root);
+  if(!renderers[key]) key = 'dashboard';
+  installStaleRenderGuard(renderers);
+  root.dataset.view = key;
+  if(!keepScroll) root.scrollTop = 0;
+  /* browser history: the hardware/edge Back gesture returns to the previous module
+     instead of leaving the app, and a reload reopens the module in the URL hash */
+  if(!(opts && opts.fromHistory) && !keepScroll){
+    const cur = history.state && history.state.view;
+    if(cur!==key){ try{ (cur? history.pushState : history.replaceState).call(history, {view:key}, '', '#'+key); }catch(e){} }
+  }
+  renderers[key](root);
 }
+window.addEventListener('popstate', e=>{
+  const key = (e.state && e.state.view) || location.hash.replace('#','');
+  if(key && CURRENT && document.getElementById('app').style.display!=='none') nav(key, {fromHistory:true});
+});
+/* Renderers asked to paint module X into #view-root while module Y is active are
+   late results of something the user already left (a GPS fix, an elevation lookup,
+   a background state refresh). Skipping them keeps the page the user is on intact;
+   nav() itself stamps root.dataset.view before it renders, so real navigation passes. */
+let STALE_RENDER_GUARD_DONE = false;
+function installStaleRenderGuard(renderers){
+  if(STALE_RENDER_GUARD_DONE) return; STALE_RENDER_GUARD_DONE = true;
+  Object.entries(renderers).forEach(([key, fn])=>{
+    const name = fn && fn.name;
+    if(!name || window[name]!==fn) return;
+    window[name] = function(root){
+      if(root && root.id==='view-root' && root.dataset.view && root.dataset.view!==key) return;
+      return fn.apply(this, arguments);
+    };
+  });
+}
+
+/* ---------- Keep the reader's place across re-renders ----------
+   Every module (and every in-page tab strip, save, approval or refresh) redraws
+   by replacing #view-root's innerHTML. Replacing the content momentarily empties
+   the scroll container, so the browser clamps its scroll position to 0 and the
+   page "jumps to the top". The accessor below restores the vertical position
+   after any same-view render (nav() still starts a new module at the top by
+   resetting scrollTop before it renders) and keeps the active tab in view inside
+   horizontally scrolling tab strips on small screens. */
+function keepActiveTabVisible(scope){
+  (scope||document).querySelectorAll('.tabs').forEach(strip=>{
+    if(strip.scrollWidth <= strip.clientWidth + 1) return;
+    const a = strip.querySelector('.tab.active');
+    if(!a) return;
+    const s = strip.getBoundingClientRect(), r = a.getBoundingClientRect();
+    if(r.left < s.left) strip.scrollLeft += r.left - s.left - 16;
+    else if(r.right > s.right) strip.scrollLeft += r.right - s.right + 16;
+  });
+}
+(function installViewRenderGuard(){
+  const root = document.getElementById('view-root');
+  const desc = Object.getOwnPropertyDescriptor(Element.prototype, 'innerHTML');
+  if(!root || !desc || !desc.set || !desc.get) return;
+  /* Some modules render in two phases (a short placeholder, then async panels).
+     If the placeholder is too short to hold the old scroll position, remember it
+     briefly and re-apply it as the content grows, unless the user scrolls first. */
+  let pending = null;
+  const cancelPending = ()=>{ pending = null; };
+  ['wheel','touchstart','keydown','mousedown'].forEach(ev=>root.addEventListener(ev, cancelPending, {passive:true}));
+  new MutationObserver(()=>{
+    if(!pending) return;
+    if(Date.now() > pending.until){ pending = null; return; }
+    if(root.scrollTop < pending.top){ root.scrollTop = pending.top; if(root.scrollTop >= pending.top - 1) pending = null; }
+  }).observe(root, {childList:true, subtree:true});
+  Object.defineProperty(root, 'innerHTML', {
+    configurable:true,
+    get(){ return desc.get.call(this); },
+    set(html){
+      const top = this.scrollTop;
+      desc.set.call(this, html);
+      pending = null;
+      if(top){ this.scrollTop = top; if(this.scrollTop < top - 1) pending = {top, until: Date.now()+3000}; }
+      keepActiveTabVisible(this);
+    }
+  });
+})();
 
 /* =========================================================
    ENTERPRISE DATA TABLE - search · sort · paginate ·
@@ -2536,7 +2640,17 @@ function toggleRouteSelect(id, checked){
   if(checked) routeSelection.add(id); else routeSelection.delete(id);
 }
 let leadsMapFilters = {farmer:'', type:'', location:'', assigned:'', status:''};
-function updateLeadsMapFilter(key, val){ leadsMapFilters[key]=val; renderLeadsMapTable(); }
+function updateLeadsMapFilter(key, val){
+  leadsMapFilters[key]=val;
+  /* the filter row is rebuilt with the table; put the caret back so typing is not one letter per click */
+  const wasTyping = document.activeElement && document.activeElement.dataset && document.activeElement.dataset.filter===key;
+  const caret = wasTyping ? document.activeElement.selectionStart : null;
+  renderLeadsMapTable();
+  if(wasTyping){
+    const again = document.querySelector(`#leadsmap-table-wrap [data-filter="${key}"]`);
+    if(again){ again.focus(); try{ again.setSelectionRange(caret, caret); }catch(e){} }
+  }
+}
 function applyLeadsMapFilters(list){
   return list.filter(l=>
     (!leadsMapFilters.farmer || l.farmer.toLowerCase().includes(leadsMapFilters.farmer.toLowerCase())) &&
@@ -2592,7 +2706,7 @@ function renderLeadsMapTable(){
   const distinctAssigned = [...new Set(clients.map(c=>c.assigned))];
   const distinctStatus = [...new Set(clients.map(c=>c.status))];
   const distinctType = [...new Set(clients.map(c=>c.kind))];
-  const fInput = (key, ph)=>`<input placeholder="${ph||'Filter…'}" value="${esc(leadsMapFilters[key])}" style="width:100%;padding:4px 6px;font-size:11px;border:1px solid var(--line);border-radius:6px;background:var(--surface);" oninput="updateLeadsMapFilter('${key}',this.value)">`;
+  const fInput = (key, ph)=>`<input data-filter="${key}" placeholder="${ph||'Filter…'}" value="${esc(leadsMapFilters[key])}" style="width:100%;padding:4px 6px;font-size:11px;border:1px solid var(--line);border-radius:6px;background:var(--surface);" oninput="updateLeadsMapFilter('${key}',this.value)">`;
   wrap.innerHTML = `
   <div class="table-wrap"><div class="table-scroll"><table><thead>
   <tr><th></th><th>Farmer</th><th>Type</th><th>Location</th><th>Assigned</th><th>Status</th><th>Open</th></tr>
@@ -4336,7 +4450,7 @@ function openPlotModal(editId, preset){
       else { DATA.farmPlots.push(Object.assign({id:uid('fp'), status:'Active'}, payload)); logActivity(`Added farm plot ${name} (${crop}, D.o.P ${fmtDate(dop)}).`); }
       window.__plotBoundary = null;
       saveData(); closeModal();
-      if(CURRENT.access.includes('farm')) nav('farm'); else renderFarm(document.getElementById('view-root'));
+      nav('farm', {keepScroll: document.getElementById('view-root').dataset.view==='farm'});
       toast(rec? 'Plot updated.' : 'Plot added.');
     }}
   ]);
@@ -6038,7 +6152,7 @@ function toggleAccess(userId, key){
   logActivity(`${CURRENT.name} ${has?'revoked':'granted'} "${key}" access for ${u.name}.`);
   saveData();
   renderAccess(document.getElementById('view-root'));
-  if(CURRENT.id===userId){ CURRENT.access = u.access; buildSidebar(); nav(document.querySelector('.sb-item.active')?.dataset.key || 'dashboard'); }
+  if(CURRENT.id===userId){ CURRENT.access = u.access; buildSidebar(); nav(document.querySelector('.sb-item.active')?.dataset.key || 'dashboard', {keepScroll:true}); }
   toast('Access updated.');
 }
 

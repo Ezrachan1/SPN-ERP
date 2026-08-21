@@ -42,6 +42,9 @@ letterheaded reports, role-based access and a full audit log.
   assignment-only by default).
 - **Responsive**: off-canvas sidebar with a hamburger toggle on mobile; on
   desktop the same toggle detaches or docks the sidebar (preference saved).
+  The shell is exactly one viewport tall: only the sidebar list and the page
+  body scroll, in-page tab switches and background refreshes keep your scroll
+  position, and a real module change starts at the top.
 
 The same `index.html` also runs standalone (opened from disk or any static
 host): without the API it falls back to browser localStorage and a clearly
