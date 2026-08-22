@@ -98,21 +98,24 @@ npx wrangler d1 create spn-erp
 ```
 
 Copy the `database_id` that the last command prints into `wrangler.jsonc`
-(replace `REPLACE_WITH_D1_DATABASE_ID`). Then create the R2 bucket for photos
-and app builds (free tier: 10 GB; R2 must be enabled once in the dashboard):
-
-```bash
-npx wrangler r2 bucket create spn-erp-files
-```
-
-and deploy:
+(replace `REPLACE_WITH_D1_DATABASE_ID`) and deploy:
 
 ```bash
 npx wrangler deploy
 ```
 
-Without the bucket the Worker still runs: images fall back to the D1 `files`
-table and APK uploads report that storage is not configured.
+**R2 (optional, for photos and SPN OS APK builds)**: R2 has to be enabled once
+on the Cloudflare account (Dashboard → R2 Object Storage → Enable; it asks for
+a payment method even for the free 10 GB tier). Until it is enabled, keep the
+`r2_buckets` block in `wrangler.jsonc` commented out, otherwise the deploy
+fails with API error 10042; the Worker runs without it (images are stored in
+D1, APK uploads report "storage not configured"). When ready:
+
+```bash
+npx wrangler r2 bucket create spn-erp-files
+```
+
+then uncomment the `r2_buckets` block and deploy again.
 
 Wrangler prints your live URL. The first visit shows the **workspace setup
 screen**: create the Super User account, then either start clean or load the

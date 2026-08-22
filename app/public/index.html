@@ -7233,7 +7233,8 @@ async function loadAppLink(elId){
   if(!SERVER_MODE || OFFLINE || SPN_CONFIG.mobile){ el.innerHTML=''; return; }
   try{
     const r = await fetchReleases();
-    const latest = (r.releases||[]).find(x=>x.platform!=='ios') || null;
+    /* without R2 on the deployment nothing is downloadable: show no link */
+    const latest = (r.storage==='r2') ? ((r.releases||[]).find(x=>x.platform!=='ios') || null) : null;
     const node = document.getElementById(elId); if(!node) return;
     node.innerHTML = latest? `<div class="app-link">📱 <b>SPN OS for Android</b> v${esc(latest.version)} · ${fmtBytes(latest.size)} <a href="${esc(apiUrl('releases/'+latest.id+'/download'))}" download="${esc(apkFileName(latest.version))}">Download APK</a><span class="small-muted">Works offline; syncs with this workspace.</span></div>` : '';
   }catch(e){ el.innerHTML=''; }

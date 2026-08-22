@@ -30,13 +30,18 @@
 	//   3) npx wrangler deploy
 	// Until EMAIL_FROM is set, invitations fall back to a shareable link.
 	"send_email": [{ "name": "SPN_EMAIL" }],
-	// Binary files (livestock photos, Android APK releases) live in R2:
-	//   npx wrangler r2 bucket create spn-erp-files
-	// The binding name SPN_FILES must stay as is. Without the bucket the Worker
-	// still runs: images fall back to D1 and APK uploads report "not configured".
-	"r2_buckets": [
-		{ "binding": "SPN_FILES", "bucket_name": "spn-erp-files" }
-	],
+	// Binary files (livestock photos, profile photos, SPN OS APK releases) can live
+	// in R2. R2 must first be enabled on the Cloudflare account (Dashboard -> R2
+	// Object Storage -> Enable; it asks for a payment method even for the free
+	// 10 GB tier), otherwise the deploy fails with API error 10042. Until then the
+	// Worker runs without it: images are stored in D1 and APK uploads report
+	// "storage not configured". To switch R2 on:
+	//   1) enable R2 in the dashboard
+	//   2) npx wrangler r2 bucket create spn-erp-files
+	//   3) uncomment the block below (binding name SPN_FILES must stay as is), push/deploy
+	// "r2_buckets": [
+	// 	{ "binding": "SPN_FILES", "bucket_name": "spn-erp-files" }
+	// ],
 	"vars": {
 		"EMAIL_FROM": "",
 		"EMAIL_FROM_NAME": "",
