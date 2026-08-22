@@ -3,6 +3,11 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#1E2B22">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="SPN OS">
+<link rel="manifest" href="/manifest.webmanifest">
 <title>SPN | Savannah Propagation Nursery - Operations Platform</title>
 <link rel="icon" type="image/png" sizes="64x64" href="data:image/png;base64,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">
 <link rel="apple-touch-icon" sizes="128x128" href="data:image/png;base64,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">
@@ -437,6 +442,11 @@ table:not(.dtable) tbody tr:hover{background:var(--mint-soft);}
 .toast.notif-pop .alert-ico{width:30px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center;flex:none;}
 .toast.notif-pop .alert-ico svg{width:16px;height:16px;}
 .toast.notif-pop .x-close{margin-left:auto;background:none;border:none;font-size:16px;color:var(--muted);cursor:pointer;line-height:1;}
+.pw-wrap{position:relative;display:block;}
+.pw-wrap input{width:100%;padding-right:40px;box-sizing:border-box;}
+.pw-eye{position:absolute;right:6px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--muted);padding:4px;display:flex;align-items:center;border-radius:6px;}
+.pw-eye:hover{color:var(--forest);background:var(--mint-soft);}
+.pw-eye svg{width:17px;height:17px;}
 @keyframes toastin{from{opacity:0;transform:translateY(-6px);}to{opacity:1;transform:none;}}
 
 /* ---------- Misc components ---------- */
@@ -1616,6 +1626,7 @@ function renderLogin(){
       </div>
       ${OFFLINE? `<div class="app-link" style="background:#FBEFD9;border-color:#E3C892;color:#7A5A12;">You are offline. Signing in needs a connection; if you signed in before on this device, SPN OS opens automatically while offline. <a href="#" onclick="tryReconnect(true);return false;" style="color:#7A5A12;">Retry</a></div>` : ''}
       <div id="login-app-link"></div>
+      <div class="app-link pwa-install-hint" style="${PWA_PROMPT? '' : 'display:none;'}">💻 <b>Install SPN OS on this device</b> <a href="#" onclick="installPWA();return false;">Install</a><span class="small-muted">Opens like an app from your home screen or desktop; works offline.</span></div>
       <div class="login-foot">You stay signed in on this browser for up to 7 days. Passwords are set once at registration and work on every device.</div>`;
     refreshLoginDirectory();
     loadAppLink('login-app-link');
@@ -2021,6 +2032,55 @@ function keepActiveTabVisible(scope){
     else if(r.right > s.right) strip.scrollLeft += r.right - s.right + 16;
   });
 }
+/* ---------- password fields: show / hide toggle on every password input ----------
+   (login, registration, first-run setup, change password, admin temporary
+   password): a small eye button is added automatically wherever one appears */
+const PW_EYE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>';
+const PW_EYE_OFF = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l18 18"/><path d="M10.6 10.6a3 3 0 004.2 4.2"/><path d="M9.9 5.1A11 11 0 0112 5c6.5 0 10 7 10 7a17 17 0 01-3.3 4.2M6.2 6.2A17.6 17.6 0 002 12s3.5 7 10 7a10.6 10.6 0 004.3-.9"/></svg>';
+function enhancePasswordFields(scope){
+  (scope||document).querySelectorAll('input[type="password"]:not([data-pw])').forEach(inp=>{
+    inp.dataset.pw = '1';
+    const wrap = document.createElement('div'); wrap.className = 'pw-wrap';
+    inp.parentNode.insertBefore(wrap, inp); wrap.appendChild(inp);
+    const btn = document.createElement('button'); btn.type = 'button'; btn.className = 'pw-eye'; btn.title = 'Show password'; btn.setAttribute('aria-label','Show password'); btn.innerHTML = PW_EYE;
+    btn.onclick = ()=>{ const show = inp.type==='password'; inp.type = show ? 'text' : 'password'; btn.innerHTML = show ? PW_EYE_OFF : PW_EYE; btn.title = show ? 'Hide password' : 'Show password'; btn.setAttribute('aria-label', btn.title); inp.focus(); };
+    wrap.appendChild(btn);
+  });
+}
+new MutationObserver(()=>enhancePasswordFields(document)).observe(document.documentElement, {childList:true, subtree:true});
+enhancePasswordFields(document);
+setInterval(()=>enhancePasswordFields(document), 1500); /* safety net for views rendered outside observed mutations */
+
+/* ---------- PWA: the website installs as an app with an offline shell (web only;
+   the phone has the SPN OS APK, which skips this) ---------- */
+let PWA_PROMPT = null;
+function registerPWA(){
+  if(SPN_CONFIG.mobile || !('serviceWorker' in navigator)) return;
+  if(!(location.protocol==='https:' || location.hostname==='localhost' || location.hostname==='127.0.0.1')) return;
+  navigator.serviceWorker.register('/sw.js').then(reg=>{
+    reg.addEventListener('updatefound', ()=>{
+      const nw = reg.installing; if(!nw) return;
+      nw.addEventListener('statechange', ()=>{
+        if(nw.state==='installed' && navigator.serviceWorker.controller){
+          const wrap = document.getElementById('toast-wrap'); if(!wrap) return;
+          const el = document.createElement('div'); el.className='toast'; el.style.cursor='pointer'; el.textContent='SPN was updated - tap to reload'; el.onclick=()=>location.reload();
+          wrap.appendChild(el); setTimeout(()=>{ if(el.parentNode) el.remove(); }, 20000);
+        }
+      });
+    });
+  }).catch(()=>{});
+  navigator.serviceWorker.addEventListener('message', e=>{ const d = e.data||{}; if(d.type==='open-view' && d.view && typeof CURRENT!=='undefined' && CURRENT) nav(d.view); });
+}
+window.addEventListener('beforeinstallprompt', e=>{ e.preventDefault(); PWA_PROMPT = e; document.querySelectorAll('.pwa-install-hint').forEach(el=>{ el.style.display=''; }); });
+window.addEventListener('appinstalled', ()=>{ PWA_PROMPT = null; document.querySelectorAll('.pwa-install-hint').forEach(el=>{ el.style.display='none'; }); toast('SPN OS is installed on this device.'); });
+async function installPWA(){
+  if(window.matchMedia && window.matchMedia('(display-mode: standalone)').matches){ toast('SPN OS is already installed and running as an app.'); return; }
+  if(!PWA_PROMPT){ toast('Use your browser menu: "Install app" or "Add to Home screen" (Safari: Share → Add to Home Screen).'); return; }
+  PWA_PROMPT.prompt();
+  try{ await PWA_PROMPT.userChoice; }catch(e){}
+  PWA_PROMPT = null;
+}
+
 (function installViewRenderGuard(){
   const root = document.getElementById('view-root');
   const desc = Object.getOwnPropertyDescriptor(Element.prototype, 'innerHTML');
@@ -2041,9 +2101,12 @@ function keepActiveTabVisible(scope){
     get(){ return desc.get.call(this); },
     set(html){
       const top = this.scrollTop;
+      /* wide tables (access matrix, data tables) keep their horizontal position too */
+      const hs = [...this.querySelectorAll('.table-scroll,.dt-scroll')].map(el=>el.scrollLeft);
       desc.set.call(this, html);
       pending = null;
       if(top){ this.scrollTop = top; if(this.scrollTop < top - 1) pending = {top, until: Date.now()+3000}; }
+      if(hs.some(v=>v)){ const after = [...this.querySelectorAll('.table-scroll,.dt-scroll')]; hs.forEach((v,i)=>{ if(v && after[i]) after[i].scrollLeft = v; }); }
       keepActiveTabVisible(this);
     }
   });
@@ -2131,8 +2194,10 @@ function dtBodyHTML(id){
     <button class="dt-page-btn" ${s.page>=pages?'disabled':''} onclick="dtPage('${id}',1)">Next ›</button>
   </div>`;
 }
-function dtRefreshBody(id){ const el=document.getElementById('dtb-'+id); if(el) el.innerHTML = dtBodyHTML(id); }
-function dtRefreshAll(id){ const el=document.getElementById('dt-'+id); if(el) el.innerHTML = dtToolbarHTML(id)+`<div id="dtb-${id}">${dtBodyHTML(id)}</div>`; }
+/* table refreshes keep the horizontal scroll position of the body */
+function dtKeepHScroll(el, fn){ const sc = el.querySelector('.dt-scroll'); const left = sc ? sc.scrollLeft : 0; fn(); const sc2 = el.querySelector('.dt-scroll'); if(sc2 && left) sc2.scrollLeft = left; }
+function dtRefreshBody(id){ const el=document.getElementById('dtb-'+id); if(el) dtKeepHScroll(el, ()=>{ el.innerHTML = dtBodyHTML(id); }); }
+function dtRefreshAll(id){ const el=document.getElementById('dt-'+id); if(el) dtKeepHScroll(el, ()=>{ el.innerHTML = dtToolbarHTML(id)+`<div id="dtb-${id}">${dtBodyHTML(id)}</div>`; }); }
 function dtSearchInput(id, val){ const s=dtState(id); s.search=val; s.page=1; dtRefreshBody(id); }
 function dtSort(id, key){ const s=dtState(id); if(s.sortKey===key){ s.sortDir*=-1; } else { s.sortKey=key; s.sortDir=1; } dtRefreshBody(id); }
 function dtPage(id, delta){ const s=dtState(id); s.page+=delta; dtRefreshBody(id); }
@@ -2600,11 +2665,13 @@ async function fillDashboardWeather(){
    with WebAudio (no files, works offline); phone tones are bundled with the app.
 ========================================================= */
 const NOTIF_TONES = {system:'Phone default sound', default:'SPN chime', bell:'Bell', drip:'Drip', soft:'Soft', alert:'Alert', none:'Silent'};
-const NOTIF_DEFAULTS = {tone:'default', vibrate:true, popups:true, system:true};
+/* tone / system = the SPN OS phone app; webTone / browser = the website in a browser */
+const NOTIF_DEFAULTS = {tone:'system', webTone:'default', vibrate:true, popups:true, system:true, browser:true};
 function notifPrefs(){
   let local = null; try{ local = JSON.parse(localStorage.getItem('spn_notif_prefs')||'null'); }catch(e){}
   return Object.assign({}, NOTIF_DEFAULTS, local||{}, (CURRENT && CURRENT.prefs) || {});
 }
+function effectiveTone(){ const p = notifPrefs(); return SPN_CONFIG.mobile ? p.tone : p.webTone; }
 let audioCtx = null;
 function playTone(name){
   if(name==='none') return;
@@ -2638,11 +2705,16 @@ function notifyNewAlerts(items){
   SEEN_ALERTS = new Set(items.map(alertKey)); /* resolved items drop out, so they can alert again if they return */
   try{ localStorage.setItem('spn_alert_seen', JSON.stringify([...SEEN_ALERTS])); }catch(e){}
   if(!fresh.length) return;
-  const p = notifPrefs();
+  const p = notifPrefs(); const tone = effectiveTone();
   if(p.popups) fresh.slice(0,3).forEach(a=>showPopupNotification(a));
-  if(p.tone!=='none') playTone(p.tone);
+  if(tone!=='none') playTone(tone);
   if(p.vibrate) vibratePattern();
-  if(p.system && window.SPN_MOBILE && SPN_MOBILE.notify) fresh.slice(0,5).forEach(a=>{ try{ SPN_MOBILE.notify({title:a.title, body:a.sub||'', view:a.view||'dashboard', tone:p.tone}); }catch(e){} });
+  if(SPN_CONFIG.mobile){
+    if(p.system && window.SPN_MOBILE && SPN_MOBILE.notify) fresh.slice(0,5).forEach(a=>{ try{ SPN_MOBILE.notify({title:a.title, body:a.sub||'', view:a.view||'dashboard', tone:p.tone}); }catch(e){} });
+  } else if(p.browser && (document.hidden || !document.hasFocus() || !p.popups)){
+    /* the browser / OS shows it when this tab is not in front (or pop-ups are off) */
+    fresh.slice(0,3).forEach(a=>showBrowserNotification(a));
+  }
 }
 function showPopupNotification(a){
   const wrap = document.getElementById('toast-wrap'); if(!wrap) return;
@@ -2672,37 +2744,60 @@ function systemReminderList(){
 }
 let reminderTimer = null, lastReminderSig = '';
 function scheduleSystemReminders(){
-  if(!(window.SPN_MOBILE && SPN_MOBILE.scheduleReminders) || !CURRENT) return;
+  if(!CURRENT) return;
   clearTimeout(reminderTimer);
   reminderTimer = setTimeout(()=>{
     const p = notifPrefs();
-    const list = p.system ? systemReminderList() : [];
-    const sig = JSON.stringify([p.tone, list.map(r=>r.key+'@'+r.at)]);
-    if(sig===lastReminderSig) return; /* nothing changed: leave the schedule alone */
-    lastReminderSig = sig;
-    try{ SPN_MOBILE.scheduleReminders(list, p.tone); }catch(e){}
+    if(SPN_CONFIG.mobile){
+      if(!(window.SPN_MOBILE && SPN_MOBILE.scheduleReminders)) return;
+      const list = p.system ? systemReminderList() : [];
+      const sig = JSON.stringify(['phone', p.tone, list.map(r=>r.key+'@'+r.at)]);
+      if(sig===lastReminderSig) return; /* nothing changed: leave the schedule alone */
+      lastReminderSig = sig;
+      try{ SPN_MOBILE.scheduleReminders(list, p.tone); }catch(e){}
+    } else {
+      /* browser: timers for the next 24 h while the site is open */
+      const list = p.browser ? systemReminderList() : [];
+      const sig = JSON.stringify(['web', list.map(r=>r.key+'@'+r.at)]);
+      if(sig===lastReminderSig) return;
+      lastReminderSig = sig;
+      scheduleWebReminders(list);
+    }
   }, 4000);
 }
-/* profile page card */
+/* profile page card. The phone app and the browser are different things: each shows
+   only its own options, with its own tone (the phone tone can be the phone's own
+   sound; the browser plays a page tone), its own notification channel (phone
+   notification bar vs browser/OS notifications) and its own permission button. */
 function renderNotifPrefsCard(){
-  const p = notifPrefs();
+  const p = notifPrefs(); const mobile = !!SPN_CONFIG.mobile;
+  const toneKey = mobile ? 'tone' : 'webTone';
+  const tones = mobile ? NOTIF_TONES : Object.fromEntries(Object.entries(NOTIF_TONES).filter(([k])=>k!=='system'));
+  const perm = (!mobile && 'Notification' in window) ? Notification.permission : null;
+  const permText = s => s==='granted'? 'Allowed in this browser' : (s==='denied'? 'Blocked - allow SPN in the browser site settings' : 'Not yet allowed');
   return `<div class="card" style="max-width:440px;margin-top:18px;">
-    <div class="card-title">Notifications</div>
+    <div class="card-title">Notifications · ${mobile? 'SPN OS app on this phone' : 'this browser'}</div>
     <div class="form-grid">
-      <div class="field"><label>Tone</label><div style="display:flex;gap:8px;"><select id="np-tone">${Object.entries(NOTIF_TONES).map(([k,v])=>`<option value="${k}" ${p.tone===k?'selected':''}>${v}</option>`).join('')}</select><button type="button" class="btn sm secondary" onclick="playTone(document.getElementById('np-tone').value)">Preview</button></div>
-        <small>"Phone default sound" uses the sound your phone already uses for notifications${SPN_CONFIG.mobile? '; any other phone sound or ringtone can be chosen per tone channel in the phone settings below' : ' (in the browser the preview plays the SPN chime instead)'}.</small>
-        ${SPN_CONFIG.mobile? `<div style="margin-top:8px;"><button type="button" class="btn sm secondary" onclick="openPhoneNotifSettings()">Choose any phone sound…</button></div>` : ''}</div>
-      <div class="field"><label>&nbsp;</label><label class="checkline" style="margin-top:8px;"><input type="checkbox" id="np-vibrate" ${p.vibrate?'checked':''}> Vibrate</label></div>
+      <div class="field"><label>Tone</label><div style="display:flex;gap:8px;"><select id="np-tone">${Object.entries(tones).map(([k,v])=>`<option value="${k}" ${p[toneKey]===k?'selected':''}>${v}</option>`).join('')}</select><button type="button" class="btn sm secondary" onclick="playTone(document.getElementById('np-tone').value)">Preview</button></div>
+        ${mobile? `<small>"Phone default sound" is the sound your phone already uses for notifications; any other phone sound or ringtone can be set per tone channel in the phone settings.</small><div style="margin-top:8px;"><button type="button" class="btn sm secondary" onclick="openPhoneNotifSettings()">Choose any phone sound…</button></div>` : `<small>Played by this page for pop-ups and browser notifications. The SPN OS phone app has its own tone setting.</small>`}</div>
+      <div class="field"><label>&nbsp;</label><label class="checkline" style="margin-top:8px;"><input type="checkbox" id="np-vibrate" ${p.vibrate?'checked':''}> Vibrate (where supported)</label></div>
       <div class="field field-full"><label class="checkline"><input type="checkbox" id="np-popups" ${p.popups?'checked':''}> Pop-up cards in the app when something new needs attention</label></div>
-      <div class="field field-full"><label class="checkline"><input type="checkbox" id="np-system" ${p.system?'checked':''}> Phone notifications (notification bar): new items, plus reminders for visits due, harvests due and seed lots expiring</label>
-        ${SPN_CONFIG.mobile? `<div style="margin-top:6px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;"><button type="button" class="btn sm secondary" onclick="requestSystemNotifications()">Allow notifications on this phone</button><span class="small-muted" id="np-perm"></span></div>` : `<small>Phone notifications apply to the SPN OS app; in the browser you get the pop-ups and tone.</small>`}
-      </div>
+      ${mobile? `<div class="field field-full"><label class="checkline"><input type="checkbox" id="np-system" ${p.system?'checked':''}> Phone notifications (notification bar): new items, plus reminders for visits due, harvests due and seed lots expiring</label>
+        <div style="margin-top:6px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;"><button type="button" class="btn sm secondary" onclick="requestSystemNotifications()">Allow notifications on this phone</button><span class="small-muted" id="np-perm"></span></div></div>`
+      : `<div class="field field-full"><label class="checkline"><input type="checkbox" id="np-browser" ${p.browser?'checked':''}> Browser notifications: shown by the browser / operating system when this tab is in the background, plus reminders (visits due, harvests due, seed lots expiring) while the site is open</label>
+        <div style="margin-top:6px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;"><button type="button" class="btn sm secondary" onclick="requestBrowserNotifications()">Allow browser notifications</button><span class="small-muted" id="np-perm">${perm===null? 'Not supported by this browser' : permText(perm)}</span></div></div>`}
     </div>
-    <div style="margin-top:10px;"><button class="btn sm leaf" onclick="saveNotifPrefs()">Save notification settings</button></div>
+    <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+      <button class="btn sm leaf" onclick="saveNotifPrefs()">Save notification settings</button>
+      ${!mobile? `<button class="btn sm secondary" onclick="installPWA()">Install SPN OS on this device</button>` : ''}
+    </div>
   </div>`;
 }
 function saveNotifPrefs(){
-  const prefs = {tone:document.getElementById('np-tone').value, vibrate:document.getElementById('np-vibrate').checked, popups:document.getElementById('np-popups').checked, system:document.getElementById('np-system').checked};
+  const mobile = !!SPN_CONFIG.mobile;
+  const prefs = Object.assign({}, NOTIF_DEFAULTS, (CURRENT && CURRENT.prefs) || {}, { vibrate:document.getElementById('np-vibrate').checked, popups:document.getElementById('np-popups').checked });
+  if(mobile){ prefs.tone = document.getElementById('np-tone').value; prefs.system = document.getElementById('np-system').checked; }
+  else { prefs.webTone = document.getElementById('np-tone').value; prefs.browser = document.getElementById('np-browser').checked; }
   CURRENT.prefs = prefs; const u = DATA.users.find(x=>x.id===CURRENT.id); if(u) u.prefs = prefs;
   try{ localStorage.setItem('spn_notif_prefs', JSON.stringify(prefs)); }catch(e){}
   saveData();
@@ -2716,6 +2811,39 @@ async function openPhoneNotifSettings(){
   if(!(window.SPN_MOBILE && SPN_MOBILE.openNotificationSettings)){ toast('Available in the SPN OS app: open the phone settings → Apps → SPN OS → Notifications.','err'); return; }
   const ok = await SPN_MOBILE.openNotificationSettings();
   if(!ok) toast('Could not open the phone settings: go to Settings → Apps → SPN OS → Notifications and pick a sound per channel.','err');
+}
+/* ---- browser notifications (web): permission, display (through the service worker
+   when the site is installed as an app, otherwise the Notification API) and
+   in-tab reminders while the site is open ---- */
+async function requestBrowserNotifications(){
+  if(!('Notification' in window)){ toast('This browser does not support notifications.','err'); return; }
+  const r = await Notification.requestPermission();
+  const el = document.getElementById('np-perm'); if(el) el.textContent = r==='granted'? 'Allowed in this browser' : (r==='denied'? 'Blocked - allow SPN in the browser site settings' : 'Not yet allowed');
+  if(r==='granted'){ lastReminderSig=''; scheduleSystemReminders(); showBrowserNotification({title:'SPN notifications are on', sub:'You will be told about new items and reminders here.', view:'dashboard'}); }
+}
+async function showBrowserNotification(a){
+  try{
+    if(SPN_CONFIG.mobile || !('Notification' in window) || Notification.permission!=='granted') return;
+    const opts = {body:a.sub||'', tag:'spn-'+alertKey(a).slice(0,60), icon:'/icons/icon-192.png', badge:'/icons/icon-192.png', data:{view:a.view||'dashboard'}, silent: effectiveTone()==='none'};
+    const reg = ('serviceWorker' in navigator) ? await navigator.serviceWorker.getRegistration().catch(()=>null) : null;
+    if(reg && reg.showNotification){ await reg.showNotification(a.title, opts); return; }
+    const n = new Notification(a.title, opts);
+    n.onclick = ()=>{ try{ window.focus(); }catch(e){} n.close(); window.__bellItems = alertItems(); const i = window.__bellItems.findIndex(x=>alertKey(x)===alertKey(a)); if(i>=0) openAlert(i); else if(a.view && CURRENT && CURRENT.access.includes(a.view)) nav(a.view); };
+  }catch(e){}
+}
+let webReminderTimers = [];
+function scheduleWebReminders(list){
+  webReminderTimers.forEach(t=>clearTimeout(t)); webReminderTimers = [];
+  const horizon = Date.now() + 24*3600*1000;
+  list.filter(r=>r.at<=horizon).slice(0,40).forEach(r=>{
+    webReminderTimers.push(setTimeout(()=>{
+      const a = {title:r.title, sub:r.body, view:r.view, sev:'blue', icon:ICONS.dashboard};
+      const p = notifPrefs();
+      if(p.popups) showPopupNotification(a);
+      if(effectiveTone()!=='none') playTone(effectiveTone());
+      if(p.browser) showBrowserNotification(a);
+    }, Math.max(1000, r.at - Date.now())));
+  });
 }
 async function requestSystemNotifications(){
   if(!(window.SPN_MOBILE && SPN_MOBILE.requestNotifPermission)){ toast('Phone notifications are available in the SPN OS app.','err'); return; }
@@ -7297,6 +7425,7 @@ async function deleteRelease(id){
 
 /* ================= INIT ================= */
 (async function init(){
+  registerPWA();
   await loadData();
   loadSyncBase();
   await loadSyncSnapshot();

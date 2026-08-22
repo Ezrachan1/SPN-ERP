@@ -55,6 +55,16 @@ letterheaded reports, role-based access and a full audit log.
   app, land in the phone's notification bar; dated items are scheduled as
   phone reminders. Everyone picks tone / vibration / pop-ups / phone
   notifications under My Profile → Notifications (saved in their profile).
+- **Installable web app (PWA)**: `manifest.webmanifest`, icons and `sw.js`
+  (network-first shell with offline fallback, cache-first libraries/fonts, the
+  API is never cached). Browsers offer "Install SPN OS on this device" (login
+  page and My Profile → Notifications); it then opens standalone and works
+  offline like the APK. Browser notifications (new items when the tab is in
+  the background, reminders while the site is open) are delivered through the
+  service worker when installed. Phone-app and browser notification settings
+  are separate (each has its own tone and permission).
+- **Password fields** everywhere (login, registration, setup, change password,
+  admin temporary password) have a show/hide toggle.
 - **Live dashboard**: every module change and every two minutes the app quietly
   pulls colleagues' changes (a sale on a rep's phone shows on the MD's
   dashboard); dates are local calendar dates, never UTC.

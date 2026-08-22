@@ -420,8 +420,9 @@ async function handleApi(req, env, url) {
         /* notification preferences: tone, vibration, pop-ups, phone notifications */
         if (body.prefs && typeof body.prefs === 'object') {
           const p = body.prefs;
-          const tone = ['system', 'default', 'bell', 'drip', 'soft', 'alert', 'none'].includes(p.tone) ? p.tone : 'default';
-          user.prefs = { tone, vibrate: p.vibrate !== false, popups: p.popups !== false, system: p.system !== false };
+          const tone = ['system', 'default', 'bell', 'drip', 'soft', 'alert', 'none'].includes(p.tone) ? p.tone : 'system';
+          const webTone = ['default', 'bell', 'drip', 'soft', 'alert', 'none'].includes(p.webTone) ? p.webTone : 'default';
+          user.prefs = { tone, webTone, vibrate: p.vibrate !== false, popups: p.popups !== false, system: p.system !== false, browser: p.browser !== false };
         }
         await env.SPN_DB.prepare('UPDATE users SET json = ?, updated_at = ? WHERE id = ?').bind(JSON.stringify(user), Date.now(), session.userId).run();
         return json({ ok: true, user });
