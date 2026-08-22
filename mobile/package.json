@@ -5,9 +5,9 @@
   "description": "SPN OS - Savannah Propagation Nursery operations app. Capacitor shell that ships the SPN ERP web app inside the APK (offline-first) and talks to the Cloudflare Worker API.",
   "scripts": {
     "build:www": "node scripts/build-www.mjs",
-    "assets": "node scripts/make-assets.mjs && capacitor-assets generate --android --iconBackgroundColor #F5F2E8 --iconBackgroundColorDark #1E2B22 --splashBackgroundColor #1E2B22 --splashBackgroundColorDark #1E2B22",
-    "android:add": "cap add android && node scripts/patch-android.mjs",
-    "sync": "npm run build:www && cap sync android && node scripts/patch-android.mjs && node scripts/make-notif-assets.mjs",
+    "assets": "node scripts/make-assets.mjs && capacitor-assets generate --android --iconBackgroundColor \"#F5F2E8\" --iconBackgroundColorDark \"#1E2B22\" --splashBackgroundColor \"#1E2B22\" --splashBackgroundColorDark \"#1E2B22\" && node scripts/make-notif-assets.mjs",
+    "android:add": "cap add android && node scripts/patch-android.mjs && npm run assets",
+    "sync": "npm run build:www && cap sync android && node scripts/patch-android.mjs && npm run assets",
     "open": "cap open android",
     "apk": "npm run sync && cd android && gradlew assembleDebug",
     "apk:release": "npm run sync && cd android && gradlew assembleRelease"

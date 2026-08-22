@@ -447,6 +447,11 @@ table:not(.dtable) tbody tr:hover{background:var(--mint-soft);}
 .pw-eye{position:absolute;right:6px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--muted);padding:4px;display:flex;align-items:center;border-radius:6px;}
 .pw-eye:hover{color:var(--forest);background:var(--mint-soft);}
 .pw-eye svg{width:17px;height:17px;}
+.suggest-host{position:relative;}
+.place-suggest{position:absolute;z-index:160;left:0;right:0;top:calc(100% + 4px);background:var(--surface);border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow-2);max-height:230px;overflow:auto;padding:4px;}
+.place-suggest button{display:block;width:100%;text-align:left;padding:8px 10px;border:none;background:none;font-size:12.5px;color:var(--ink);cursor:pointer;border-radius:7px;}
+.place-suggest button:hover,.place-suggest button.on{background:var(--mint-soft);}
+.place-suggest .ps-sub{display:block;font-size:11px;color:var(--muted);}
 @keyframes toastin{from{opacity:0;transform:translateY(-6px);}to{opacity:1;transform:none;}}
 
 /* ---------- Misc components ---------- */
@@ -5876,6 +5881,53 @@ async function loadWeatherHero(){
     <div class="adv-row"><div><div style="font-weight:600;">${heatRow.text}</div><div class="small-muted">${heatRow.detail}</div></div>${heatRow.chip}</div>
     <div class="small-muted" style="margin-top:10px;">Derived from today's forecast for ${esc(DATA.weatherLocation.name.split(',')[0])} - see the Spray Advisory tab for the full 20-day AI assessment.</div>`;
 }
+/* ---- place type-ahead: suggestions from Open-Meteo geocoding under any location
+   box (weather area search, Compare Years/Areas A and B). Picking a suggestion
+   hands back {name, lat, lng}; Escape or clicking elsewhere closes it. ---- */
+function attachPlaceSuggest(input, onPick){
+  if(!input || input.dataset.suggest) return;
+  input.dataset.suggest = '1';
+  input.setAttribute('autocomplete','off');
+  const host = input.parentElement; if(host) host.classList.add('suggest-host');
+  let timer = null, seq = 0, results = [], active = -1;
+  const close = ()=>{ const d = host && host.querySelector('.place-suggest'); if(d) d.remove(); active = -1; };
+  const render = ()=>{
+    close(); if(!results.length) return;
+    const box = document.createElement('div'); box.className = 'place-suggest';
+    box.innerHTML = results.map((r,i)=>`<button type="button" data-i="${i}" class="${i===active?'on':''}"><b>${esc(r.short)}</b><span class="ps-sub">${esc(r.detail)}</span></button>`).join('');
+    box.addEventListener('mousedown', e=>{ e.preventDefault(); }); /* keep the input focused */
+    box.addEventListener('click', e=>{ const b = e.target.closest('button[data-i]'); if(!b) return; pick(+b.dataset.i); });
+    host.appendChild(box);
+  };
+  const pick = i=>{ const r = results[i]; if(!r) return; input.value = r.name; close(); results = []; try{ onPick(r); }catch(e){} };
+  const search = async ()=>{
+    const q = input.value.trim(); const my = ++seq;
+    if(q.length < 2){ results = []; close(); return; }
+    try{
+      const r = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&count=7&language=en`);
+      const d = await r.json();
+      if(my !== seq) return; /* a newer keystroke won */
+      results = (d.results||[]).map(x=>({ lat:x.latitude, lng:x.longitude, short:x.name, detail:[x.admin1, x.country].filter(Boolean).join(', '), name:x.name+(x.admin1? ', '+x.admin1:'')+(x.country? ', '+x.country:'') }));
+      active = results.length ? 0 : -1; render();
+    }catch(e){ results = []; close(); }
+  };
+  input.addEventListener('input', ()=>{ clearTimeout(timer); timer = setTimeout(search, 260); });
+  input.addEventListener('keydown', e=>{
+    if(!results.length) return;
+    if(e.key==='ArrowDown'){ e.preventDefault(); active = (active+1) % results.length; render(); }
+    else if(e.key==='ArrowUp'){ e.preventDefault(); active = (active-1+results.length) % results.length; render(); }
+    else if(e.key==='Enter'){ if(active>=0){ e.preventDefault(); pick(active); } }
+    else if(e.key==='Escape'){ close(); }
+  });
+  input.addEventListener('blur', ()=>{ setTimeout(close, 150); });
+}
+/* the location boxes get the type-ahead the first time they receive focus */
+document.addEventListener('focusin', e=>{
+  const el = e.target; if(!(el instanceof HTMLInputElement) || el.dataset.suggest) return;
+  if(el.id==='wx-search') attachPlaceSuggest(el, r=>setWeatherLocation(r.lat, r.lng, r.name));
+  else if(el.id==='cmp-a-loc') attachPlaceSuggest(el, r=>{ weatherCompareA = Object.assign({}, weatherCompareA||{}, {name:r.name, lat:r.lat, lng:r.lng, picked:r.name}); });
+  else if(el.id==='cmp-b-loc') attachPlaceSuggest(el, r=>{ weatherCompareB = Object.assign({}, weatherCompareB||{}, {name:r.name, lat:r.lat, lng:r.lng, picked:r.name}); });
+});
 async function searchWeatherLocation(){
   const q = document.getElementById('wx-search').value.trim();
   if(!q){toast('Type a place name to search.','err');return;}
@@ -6075,8 +6127,9 @@ async function runWeatherCompare(){
   const locBtext = document.getElementById('cmp-b-loc').value.trim();
   const yearA = +document.getElementById('cmp-a-year').value;
   const yearB = +document.getElementById('cmp-b-year').value;
-  const geoA = await geocodeFirst(locAtext) || DATA.weatherLocation;
-  const geoB = await geocodeFirst(locBtext) || DATA.weatherLocation;
+  /* a place picked from the suggestions is used as-is; free text is geocoded */
+  const geoA = (weatherCompareA && weatherCompareA.picked===locAtext && weatherCompareA.lat!=null) ? {name:weatherCompareA.name, lat:weatherCompareA.lat, lng:weatherCompareA.lng} : (await geocodeFirst(locAtext) || DATA.weatherLocation);
+  const geoB = (weatherCompareB && weatherCompareB.picked===locBtext && weatherCompareB.lat!=null) ? {name:weatherCompareB.name, lat:weatherCompareB.lat, lng:weatherCompareB.lng} : (await geocodeFirst(locBtext) || DATA.weatherLocation);
   weatherCompareA = {...geoA, year:yearA};
   weatherCompareB = {...geoB, year:yearB};
   async function monthly(loc, year){

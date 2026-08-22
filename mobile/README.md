@@ -59,9 +59,14 @@ Windows paths below; adapt for macOS/Linux.
 cd mobile
 npm install
 npm run build:www          # builds www/ from ../app/public/index.html
-npm run android:add        # first time only: generates android/ and patches it
-npm run assets             # icons + splash from the SPN logo (needs sharp, installed)
+npm run android:add        # first time only: generates android/, patches it and
+                           # writes the SPN launcher icons, splash and tones
 ```
+
+`npm run sync` (and therefore `npm run apk`) re-runs the icon/splash/tone
+generation every time, so a freshly generated `android/` never ships with the
+Capacitor placeholder icon. If a phone still shows the old icon after
+installing a new build, uninstall and reinstall once (launchers cache icons).
 
 Set the SDK/JDK for Gradle once (or open the project in Android Studio, which
 does this for you):
