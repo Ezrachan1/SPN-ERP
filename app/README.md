@@ -63,6 +63,10 @@ letterheaded reports, role-based access and a full audit log.
   the background, reminders while the site is open) are delivered through the
   service worker when installed. Phone-app and browser notification settings
   are separate (each has its own tone and permission).
+- **Place type-ahead** on every location box (weather area search, Compare
+  Years/Areas, POS customer location, lead location, workspace region): Open-Meteo
+  geocoding suggestions with keyboard support; picking a place fills the
+  companion GPS box when it is empty. Any input with `data-place` gets it too.
 - **Password fields** everywhere (login, registration, setup, change password,
   admin temporary password) have a show/hide toggle.
 - **Live dashboard**: every module change and every two minutes the app quietly

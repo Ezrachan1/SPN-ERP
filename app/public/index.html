@@ -5921,12 +5921,27 @@ function attachPlaceSuggest(input, onPick){
   });
   input.addEventListener('blur', ()=>{ setTimeout(close, 150); });
 }
-/* the location boxes get the type-ahead the first time they receive focus */
+/* Every place box gets the type-ahead the first time it receives focus, modals
+   included: weather area search, Compare A/B, POS customer location, lead location,
+   workspace region (setup and settings), plus any input marked data-place. Fields
+   with a companion GPS box get the picked coordinates when the box is still empty. */
+const PLACE_INPUTS = {
+  'wx-search':  { pick: r=>setWeatherLocation(r.lat, r.lng, r.name) },
+  'cmp-a-loc':  { pick: r=>{ weatherCompareA = Object.assign({}, weatherCompareA||{}, {name:r.name, lat:r.lat, lng:r.lng, picked:r.name}); } },
+  'cmp-b-loc':  { pick: r=>{ weatherCompareB = Object.assign({}, weatherCompareB||{}, {name:r.name, lat:r.lat, lng:r.lng, picked:r.name}); } },
+  'f-location': { gps:'f-gps' },   /* New Cash Sale: customer location */
+  'l-loc':      { gps:'l-gps' },   /* New lead: location description */
+  'su-region':  {},                /* first-run setup: region */
+  'org-region': {},                /* workspace settings: region */
+};
 document.addEventListener('focusin', e=>{
   const el = e.target; if(!(el instanceof HTMLInputElement) || el.dataset.suggest) return;
-  if(el.id==='wx-search') attachPlaceSuggest(el, r=>setWeatherLocation(r.lat, r.lng, r.name));
-  else if(el.id==='cmp-a-loc') attachPlaceSuggest(el, r=>{ weatherCompareA = Object.assign({}, weatherCompareA||{}, {name:r.name, lat:r.lat, lng:r.lng, picked:r.name}); });
-  else if(el.id==='cmp-b-loc') attachPlaceSuggest(el, r=>{ weatherCompareB = Object.assign({}, weatherCompareB||{}, {name:r.name, lat:r.lat, lng:r.lng, picked:r.name}); });
+  const cfg = PLACE_INPUTS[el.id] || (el.dataset.place!==undefined ? {} : null);
+  if(!cfg) return;
+  attachPlaceSuggest(el, r=>{
+    if(cfg.pick){ cfg.pick(r); return; }
+    if(cfg.gps){ const g = document.getElementById(cfg.gps); if(g && !g.value.trim()) g.value = r.lat.toFixed(5)+', '+r.lng.toFixed(5); }
+  });
 });
 async function searchWeatherLocation(){
   const q = document.getElementById('wx-search').value.trim();
