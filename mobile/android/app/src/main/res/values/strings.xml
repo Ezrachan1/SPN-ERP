@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">SPN OS</string>
+    <string name="title_activity_main">SPN OS</string>
+    <string name="package_name">com.spn.os</string>
+    <string name="custom_url_scheme">com.spn.os</string>
+</resources>

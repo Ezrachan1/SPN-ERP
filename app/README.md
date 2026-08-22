@@ -32,6 +32,32 @@ letterheaded reports, role-based access and a full audit log.
 - **First-run setup**: the first visit to a fresh deployment walks you
   through creating the System Super User and the organisation profile, then
   offers a clean start or a demo dataset.
+- **Seedling stock that moves**: a POS sale picks the nursery batch it comes
+  from and draws it down (over-selling is blocked); batches can be marked sold
+  out / transplanted. Dashboard, pipeline, Seedling Stock, the POS list and the
+  production/stock reports all show what is actually left. Sales carry the VAT
+  amount for standard-rated lines; receipt and PR numbers continue from the
+  highest existing number.
+- **Seeds inventory**: seed lots received (crop, variety, supplier, lot and
+  KEPHIS numbers, class, quantity in seeds/g/kg, germination, expiry, cost,
+  store), a movement log, expiry/low-stock attention on the dashboard and a
+  report. Sowing picks a lot and draws the quantity down automatically.
+- **Access requests** cover operational modules only; Users & Access,
+  Departments and the Audit Log are assigned by the Admin in the access matrix
+  and can neither be requested nor granted through the approvals queue.
+- **Notifications** (bell): low consumables, seed lots expired/expiring/low,
+  batches ready for sale, harvests due, overdue and due-today lead visits,
+  requisitions awaiting the roles that can approve them, pending purchase
+  requests, AI scans to review, pending registrations and access requests
+  (admins), offline/session state, and on the phone "SPN OS update available".
+  Each item opens the exact record; the badge refreshes on every save. New
+  items also pop up as cards (with a tone and vibration) and, in the SPN OS
+  app, land in the phone's notification bar; dated items are scheduled as
+  phone reminders. Everyone picks tone / vibration / pop-ups / phone
+  notifications under My Profile → Notifications (saved in their profile).
+- **Live dashboard**: every module change and every two minutes the app quietly
+  pulls colleagues' changes (a sale on a rep's phone shows on the MD's
+  dashboard); dates are local calendar dates, never UTC.
 - **Farm plots**: fields with crop, variety, area, date of planting, a live
   crop-day counter, FAO-56 development stage, expected harvest and rainfall
   since planting; one click hands a plot to the irrigation calculator.
@@ -40,6 +66,16 @@ letterheaded reports, role-based access and a full audit log.
 - **Report viewers**: reports are visible by role, and admins can additionally
   grant individual users viewing rights per report (the Farm Plots report is
   assignment-only by default).
+- **Offline-first**: every save lands in the device store first and syncs per
+  collection; if the API is unreachable the app switches to an Offline mode
+  (topbar chip), keeps working, and on reconnect 3-way merges and pushes the
+  local changes (your touched records win, colleagues' changes survive), uploads
+  photos taken offline, then pulls the latest workspace. Offline work survives
+  closing the browser/app; the last weather forecast is cached.
+- **SPN OS mobile app**: `../mobile` wraps this same file in a Capacitor Android
+  app (UI shipped in the APK, API on this Worker). The Super User uploads builds
+  in Users & Access; they go to R2, the newest 5 are kept, and the login page
+  shows a download link to everyone. Images (livestock photos) also go to R2.
 - **Responsive**: off-canvas sidebar with a hamburger toggle on mobile; on
   desktop the same toggle detaches or docks the sidebar (preference saved).
   The shell is exactly one viewport tall: only the sidebar list and the page
@@ -62,11 +98,21 @@ npx wrangler d1 create spn-erp
 ```
 
 Copy the `database_id` that the last command prints into `wrangler.jsonc`
-(replace `REPLACE_WITH_D1_DATABASE_ID`), then:
+(replace `REPLACE_WITH_D1_DATABASE_ID`). Then create the R2 bucket for photos
+and app builds (free tier: 10 GB; R2 must be enabled once in the dashboard):
+
+```bash
+npx wrangler r2 bucket create spn-erp-files
+```
+
+and deploy:
 
 ```bash
 npx wrangler deploy
 ```
+
+Without the bucket the Worker still runs: images fall back to the D1 `files`
+table and APK uploads report that storage is not configured.
 
 Wrangler prints your live URL. The first visit shows the **workspace setup
 screen**: create the Super User account, then either start clean or load the
@@ -127,19 +173,28 @@ works locally too.
 | POST   | /api/login              | none      | `{userId, password}` -> `{token, mustChange}` |
 | POST   | /api/logout             | Bearer    | End the current session                       |
 | POST   | /api/password           | Bearer    | Change own password                           |
+| POST   | /api/profile            | Bearer    | Change own name, phone, email, avatar         |
 | POST   | /api/users/password     | Admin     | Issue a temporary password                    |
 | GET    | /api/state              | Bearer    | Full workspace (users + collections)          |
 | PUT    | /api/collections/:name  | Bearer    | Upsert one collection (granular sync)         |
 | PUT    | /api/users              | Admin     | Replace user list (auth columns preserved)    |
 | POST   | /api/reset              | SuperUser | `{mode:'operational'|'factory'}`              |
 | POST   | /api/ai                 | Bearer    | Proxy to the Anthropic Messages API           |
-| POST   | /api/files              | Bearer    | Store a downscaled image (livestock photos)   |
+| POST   | /api/files              | Bearer    | Store a downscaled image (R2, or D1 fallback) |
 | GET    | /api/files/:id          | none**    | Serve a stored image                          |
 | DELETE | /api/files/:id          | Bearer    | Remove a stored image                         |
 | POST   | /api/activity           | Bearer    | Server-merged per-user activity increment     |
+| GET    | /api/releases           | none      | App builds, newest first                      |
+| GET    | /api/releases/:id/download | none   | Download an APK (R2, attachment)              |
+| POST   | /api/releases           | SuperUser | Upload an APK (raw body + X-Release-Version / X-Release-Notes / X-File-Name); keeps 5, purges older |
+| DELETE | /api/releases/:id       | SuperUser | Delete a build                                |
 
 **Image GETs are unauthenticated so `<img>` tags can load them; the ids are long
 random tokens, which is the access control for these non-sensitive farm photos.
+
+Cross-origin: the SPN OS mobile app calls the API from its WebView origin; the
+Worker answers CORS for `https://localhost` / `capacitor://localhost` plus any
+origins listed in the `ALLOWED_ORIGINS` var.
 
 *`/api/setup` refuses once any user exists.
 
@@ -157,7 +212,9 @@ Users & Access → Danger zone:
 ## Notes and limits
 
 Deliberate simplifications that a larger rollout should revisit: no login
-rate limiting, collection-level (not row-level) write granularity with
-last-write-wins, and no server-side field validation beyond JSON shape.
+rate limiting, collection-level storage (writes carry the hash of the version
+the device last synced; on a mismatch the Worker answers 409 and the client
+merges per record before retrying, so concurrent sales/leads/sowing records
+are not lost), and no server-side field validation beyond JSON shape.
 ID/CV uploads are flags only; store real documents encrypted. Weather uses
 the free Open-Meteo API.

@@ -13,6 +13,7 @@
  *   POST /api/login               { userId, password } -> { token, mustChange }
  *   POST /api/logout              end the current session
  *   POST /api/password            change own password { current, next }
+ *   POST /api/profile             change own name / phone / email / avatar
  *   POST /api/users/password      admin: set a temporary password { userId, password }
  *   POST /api/invites             admin: create an invitation { role } -> { token }
  *   GET  /api/invites             admin: list invitations
@@ -25,6 +26,19 @@
  *   POST /api/reset               superuser: { mode: 'operational' | 'factory' }
  *   POST /api/ai                  proxy to the Anthropic Messages API (needs
  *                                 the ANTHROPIC_API_KEY secret)
+ *   POST /api/files               store a downscaled image (R2 when SPN_FILES is
+ *                                 bound, else the D1 files table) -> { id }
+ *   GET  /api/files/:id           public: serve an image (random id is the key)
+ *   DELETE /api/files/:id         remove an image
+ *   GET  /api/releases            public: app builds, newest first
+ *   GET  /api/releases/:id/download   public: download an APK (R2)
+ *   POST /api/releases            superuser: upload an APK (raw body +
+ *                                 X-Release-Version / X-Release-Notes / X-File-Name);
+ *                                 keeps the newest KEEP_RELEASES builds, purges the rest
+ *   DELETE /api/releases/:id      superuser: delete a build
+ *
+ * Cross-origin: the mobile app (Capacitor WebView) is allowed via CORS for the
+ * origins in ALLOWED_ORIGINS plus the Capacitor defaults (https://localhost etc).
  *
  * Auth: per-user PBKDF2-SHA256 hashes with a versioned cost (v1$<iterations>$<hash>).
  * The default of 10k iterations stays inside the Workers free-plan CPU budget;
@@ -34,20 +48,74 @@
  */
 const JSON_HEADERS = { 'Content-Type': 'application/json' };
 const json = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: JSON_HEADERS });
+
+/* ---- CORS: the Android/iOS app (Capacitor WebView) calls this API from its own
+   origin. Only the origins listed in ALLOWED_ORIGINS (comma separated) are accepted;
+   browsers on the Worker's own origin never send a cross-origin request. ---- */
+const DEFAULT_APP_ORIGINS = ['https://localhost', 'capacitor://localhost', 'http://localhost', 'ionic://localhost'];
+function allowedOrigin(req, env) {
+  const origin = req.headers.get('Origin');
+  if (!origin) return null;
+  const list = String(env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
+  const all = list.length ? list.concat(DEFAULT_APP_ORIGINS) : DEFAULT_APP_ORIGINS;
+  return all.includes(origin) ? origin : null;
+}
+function withCors(res, origin) {
+  if (!origin) return res;
+  const out = new Response(res.body, res);
+  out.headers.set('Access-Control-Allow-Origin', origin);
+  out.headers.set('Access-Control-Expose-Headers', 'Content-Disposition, Content-Length');
+  out.headers.append('Vary', 'Origin');
+  return out;
+}
+function preflight(origin) {
+  if (!origin) return new Response(null, { status: 403 });
+  return new Response(null, { status: 204, headers: {
+    'Access-Control-Allow-Origin': origin,
+    'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Release-Version, X-Release-Notes, X-File-Name, X-Base-Hash',
+    'Access-Control-Max-Age': '86400',
+    'Vary': 'Origin',
+  } });
+}
+
+/* ---- Binary storage: R2 when the SPN_FILES bucket is bound, otherwise the D1
+   files table (so a deployment without R2 keeps working). Images live under img/,
+   app releases under apk/. ---- */
+const KEEP_RELEASES = 5; /* current + 4 previous builds; anything older is purged */
+const hasR2 = env => !!(env && env.SPN_FILES && typeof env.SPN_FILES.put === 'function');
+const newId = () => crypto.randomUUID().replace(/-/g, '') + crypto.randomUUID().slice(0, 8);
+async function purgeOldReleases(env) {
+  const rows = (await env.SPN_DB.prepare('SELECT id, r2_key FROM releases ORDER BY created_at DESC').all()).results || [];
+  const stale = rows.slice(KEEP_RELEASES);
+  for (const r of stale) {
+    if (r.r2_key && hasR2(env)) { try { await env.SPN_FILES.delete(r.r2_key); } catch (e) {} }
+    await env.SPN_DB.prepare('DELETE FROM releases WHERE id = ?').bind(r.id).run();
+  }
+  return stale.length;
+}
+const releaseRow = r => ({ id: r.id, version: r.version, notes: r.notes || '', fileName: r.file_name, size: r.size, platform: r.platform || 'android', createdAt: r.created_at, createdBy: r.created_by, url: '/api/releases/' + r.id + '/download' });
+/* same content hash as the SPA's syncHash(): lets a client say which version of a
+   collection it is updating without shipping the whole text twice */
+function syncHash(s) {
+  let h1 = 0x811c9dc5, h2 = 0x1b873593;
+  for (let i = 0; i < s.length; i++) { const c = s.charCodeAt(i); h1 = Math.imul(h1 ^ c, 16777619); h2 = Math.imul(h2 ^ c, 0x5bd1e995) ^ (h2 >>> 13); }
+  return (h1 >>> 0).toString(36) + '.' + (h2 >>> 0).toString(36) + '.' + s.length;
+}
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const PBKDF2_ITERATIONS = 10000;
 const LEGACY_ITERATIONS = 100000;
 
 const COLLECTIONS = [
-  'departments', 'staff', 'consumables', 'seedlingStock', 'livestockInventory',
+  'departments', 'staff', 'consumables', 'seedlingStock', 'seedInventory', 'livestockInventory',
   'farmPlots', 'rainfallLog', 'reportAccess',
   'sowingRecords', 'cashSales', 'procurement', 'requisitions', 'leads', 'auditLog',
   'reportsAccessList', 'accessRequests', 'aiScans', 'activityStats', 'weatherLocation',
   'salesHistory', 'priceHistory', 'companyKraPin', 'leadsMonthlyTarget', 'org',
 ];
 const OPERATIONAL = [
-  'staff', 'consumables', 'seedlingStock', 'livestockInventory', 'farmPlots', 'rainfallLog',
+  'staff', 'consumables', 'seedlingStock', 'seedInventory', 'livestockInventory', 'farmPlots', 'rainfallLog',
   'sowingRecords', 'cashSales', 'procurement', 'requisitions', 'leads', 'auditLog',
   'accessRequests', 'aiScans', 'activityStats', 'salesHistory', 'priceHistory',
 ];
@@ -61,6 +129,7 @@ async function ensureSchema(env) {
     env.SPN_DB.prepare('CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, user_id TEXT NOT NULL, expires_at INTEGER NOT NULL)'),
     env.SPN_DB.prepare('CREATE TABLE IF NOT EXISTS invites (token TEXT PRIMARY KEY, role TEXT, created_by TEXT, created_at INTEGER, expires_at INTEGER, used_by TEXT)'),
     env.SPN_DB.prepare('CREATE TABLE IF NOT EXISTS files (id TEXT PRIMARY KEY, owner TEXT, mime TEXT, data TEXT NOT NULL, size INTEGER, created_at INTEGER)'),
+    env.SPN_DB.prepare('CREATE TABLE IF NOT EXISTS releases (id TEXT PRIMARY KEY, version TEXT NOT NULL, notes TEXT, file_name TEXT, r2_key TEXT NOT NULL, size INTEGER, platform TEXT, created_at INTEGER, created_by TEXT)'),
   ]);
   /* migration: invites gained an email column for emailed invitations */
   try { await env.SPN_DB.prepare('ALTER TABLE invites ADD COLUMN email TEXT').run(); } catch (e) {}
@@ -156,6 +225,15 @@ export default {
     if (!url.pathname.startsWith('/api/')) {
       return env.ASSETS.fetch(req);
     }
+    const origin = allowedOrigin(req, env);
+    if (req.method === 'OPTIONS') return preflight(origin);
+    const res = await handleApi(req, env, url);
+    return withCors(res, origin);
+  },
+};
+
+async function handleApi(req, env, url) {
+  {
     const route = url.pathname.slice(5).replace(/\/+$/, '');
     try {
       await ensureSchema(env);
@@ -237,10 +315,40 @@ export default {
          tokens, which is the access control for these non-sensitive farm photos. */
       if (route.startsWith('files/') && req.method === 'GET') {
         const id = route.slice('files/'.length);
+        if (!/^[a-zA-Z0-9]+$/.test(id)) return json({ error: 'Not found' }, 404);
+        if (hasR2(env)) {
+          const obj = await env.SPN_FILES.get('img/' + id);
+          if (obj) {
+            return new Response(obj.body, { headers: { 'Content-Type': (obj.httpMetadata && obj.httpMetadata.contentType) || 'image/jpeg', 'Cache-Control': 'private, max-age=86400', 'ETag': obj.httpEtag } });
+          }
+        }
         const row = await env.SPN_DB.prepare('SELECT mime, data FROM files WHERE id = ?').bind(id).first();
         if (!row) return json({ error: 'Not found' }, 404);
         const bytes = Uint8Array.from(atob(row.data), c => c.charCodeAt(0));
         return new Response(bytes, { headers: { 'Content-Type': row.mime || 'image/jpeg', 'Cache-Control': 'private, max-age=86400' } });
+      }
+
+      /* App releases (APK): the list and the download are public so the login page
+         and any device can fetch the current build; uploads are admin-only below. */
+      if (route === 'releases' && req.method === 'GET') {
+        const rows = (await env.SPN_DB.prepare('SELECT * FROM releases ORDER BY created_at DESC').all()).results || [];
+        return json({ releases: rows.map(releaseRow), storage: hasR2(env) ? 'r2' : 'none' });
+      }
+      if (/^releases\/[a-zA-Z0-9]+\/download$/.test(route) && req.method === 'GET') {
+        const id = route.split('/')[1];
+        const row = await env.SPN_DB.prepare('SELECT * FROM releases WHERE id = ?').bind(id).first();
+        if (!row) return json({ error: 'Release not found' }, 404);
+        if (!hasR2(env)) return json({ error: 'File storage (R2) is not configured on this deployment' }, 503);
+        const obj = await env.SPN_FILES.get(row.r2_key);
+        if (!obj) return json({ error: 'Release file is missing from storage' }, 404);
+        /* the download is always named after the app and version, whatever the uploaded file was called */
+        const fname = 'SPN-OS-v' + String(row.version || '').replace(/^v/i, '').replace(/[^A-Za-z0-9._-]+/g, '_') + (row.platform === 'ios' ? '.ipa' : '.apk');
+        return new Response(obj.body, { headers: {
+          'Content-Type': (obj.httpMetadata && obj.httpMetadata.contentType) || 'application/vnd.android.package-archive',
+          'Content-Disposition': 'attachment; filename="' + fname + '"; filename*=UTF-8\'\'' + encodeURIComponent(fname),
+          'Content-Length': String(obj.size),
+          'Cache-Control': 'public, max-age=300',
+        } });
       }
 
       if (route === 'login' && req.method === 'POST') {
@@ -289,6 +397,36 @@ export default {
         return json({ ok: true });
       }
 
+      /* self-service profile: every signed-in user may change their own name, phone,
+         email and avatar (preset key or an uploaded /api/files image); nothing else */
+      if (route === 'profile' && req.method === 'POST') {
+        const body = await req.json().catch(() => ({}));
+        const row = await env.SPN_DB.prepare('SELECT json FROM users WHERE id = ?').bind(session.userId).first();
+        if (!row) return json({ error: 'Account not found' }, 404);
+        const user = JSON.parse(row.json);
+        const name = String(body.name || '').trim().slice(0, 80);
+        if (!name) return json({ error: 'Name is required' }, 400);
+        const email = String(body.email || '').trim().slice(0, 120);
+        if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return json({ error: 'Invalid email address' }, 400);
+        const phone = String(body.phone || '').trim().slice(0, 30);
+        let avatar = null;
+        const av = body.avatar;
+        if (av && typeof av === 'object') {
+          if (av.type === 'preset' && /^[a-z0-9_-]{1,30}$/.test(String(av.key || ''))) avatar = { type: 'preset', key: String(av.key) };
+          else if (av.type === 'photo' && /^\/api\/files\/[a-zA-Z0-9]+$/.test(String(av.src || ''))) avatar = { type: 'photo', src: String(av.src), fileId: String(av.src).split('/').pop() };
+          else return json({ error: 'Invalid avatar' }, 400);
+        }
+        Object.assign(user, { name, email, phone, avatar });
+        /* notification preferences: tone, vibration, pop-ups, phone notifications */
+        if (body.prefs && typeof body.prefs === 'object') {
+          const p = body.prefs;
+          const tone = ['system', 'default', 'bell', 'drip', 'soft', 'alert', 'none'].includes(p.tone) ? p.tone : 'default';
+          user.prefs = { tone, vibrate: p.vibrate !== false, popups: p.popups !== false, system: p.system !== false };
+        }
+        await env.SPN_DB.prepare('UPDATE users SET json = ?, updated_at = ? WHERE id = ?').bind(JSON.stringify(user), Date.now(), session.userId).run();
+        return json({ ok: true, user });
+      }
+
       if (route === 'users/password' && req.method === 'POST') {
         if (!isAdmin(session.user)) return json({ error: 'Admin or Super User required' }, 403);
         const body = await req.json().catch(() => ({}));
@@ -308,13 +446,73 @@ export default {
         const data = String(body.data || '');
         if (!data || data.length > 900000) return json({ error: 'Image missing or too large (max ~650 KB after downscaling)' }, 413);
         const mime = /^image\/(jpeg|png|webp)$/.test(String(body.mime || '')) ? body.mime : 'image/jpeg';
-        const id = crypto.randomUUID().replace(/-/g, '') + crypto.randomUUID().slice(0, 8);
+        const id = newId();
+        if (hasR2(env)) {
+          /* images go to R2 (cheap object storage, no D1 row-size pressure) */
+          const bytes = Uint8Array.from(atob(data), c => c.charCodeAt(0));
+          await env.SPN_FILES.put('img/' + id, bytes, { httpMetadata: { contentType: mime }, customMetadata: { owner: session.userId, createdAt: String(Date.now()) } });
+          return json({ ok: true, id, storage: 'r2' });
+        }
         await env.SPN_DB.prepare('INSERT INTO files (id, owner, mime, data, size, created_at) VALUES (?, ?, ?, ?, ?, ?)')
           .bind(id, session.userId, mime, data, data.length, Date.now()).run();
-        return json({ ok: true, id });
+        return json({ ok: true, id, storage: 'd1' });
       }
       if (route.startsWith('files/') && req.method === 'DELETE') {
-        await env.SPN_DB.prepare('DELETE FROM files WHERE id = ?').bind(route.slice('files/'.length)).run();
+        const id = route.slice('files/'.length);
+        if (hasR2(env)) { try { await env.SPN_FILES.delete('img/' + id); } catch (e) {} }
+        await env.SPN_DB.prepare('DELETE FROM files WHERE id = ?').bind(id).run();
+        return json({ ok: true });
+      }
+
+      /* App release upload (Super User only): raw APK bytes in the body, metadata in
+         headers. Older builds beyond KEEP_RELEASES are purged automatically. */
+      if (route === 'releases' && req.method === 'POST') {
+        if (session.user.role !== 'SuperUser') return json({ error: 'Super User required' }, 403);
+        if (!hasR2(env)) return json({ error: 'File storage (R2) is not configured: bind the SPN_FILES bucket in wrangler.jsonc' }, 503);
+        const version = String(req.headers.get('X-Release-Version') || '').trim().slice(0, 40);
+        if (!version) return json({ error: 'X-Release-Version header is required' }, 400);
+        let notes = ''; try { notes = decodeURIComponent(req.headers.get('X-Release-Notes') || ''); } catch (e) { notes = req.headers.get('X-Release-Notes') || ''; }
+        const fileName = String(req.headers.get('X-File-Name') || ('SPN-OS-v' + version + '.apk')).replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 120);
+        const platform = /\.ipa$/i.test(fileName) ? 'ios' : 'android';
+        const declared = +(req.headers.get('Content-Length') || 0);
+        const MAX_RELEASE = 100 * 1024 * 1024; /* Workers request body limit */
+        if (declared > MAX_RELEASE) return json({ error: 'Release file too large (max 100 MB)' }, 413);
+        const id = newId();
+        const key = 'apk/' + id + '-' + fileName;
+        const meta = {
+          httpMetadata: { contentType: platform === 'ios' ? 'application/octet-stream' : 'application/vnd.android.package-archive' },
+          customMetadata: { version, uploadedBy: session.userId, fileName },
+        };
+        let size = declared;
+        if (declared > 0 && req.body && typeof FixedLengthStream === 'function') {
+          /* stream straight into R2 so a large APK never sits in Worker memory */
+          const { readable, writable } = new FixedLengthStream(declared);
+          req.body.pipeTo(writable).catch(() => {});
+          await env.SPN_FILES.put(key, readable, meta);
+        } else {
+          const bytes = await req.arrayBuffer();
+          if (!bytes.byteLength) return json({ error: 'Empty upload' }, 400);
+          if (bytes.byteLength > MAX_RELEASE) return json({ error: 'Release file too large (max 100 MB)' }, 413);
+          size = bytes.byteLength;
+          await env.SPN_FILES.put(key, bytes, meta);
+        }
+        try {
+          await env.SPN_DB.prepare('INSERT INTO releases (id, version, notes, file_name, r2_key, size, platform, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+            .bind(id, version, notes.slice(0, 2000), fileName, key, size, platform, Date.now(), session.userId).run();
+        } catch (e) {
+          try { await env.SPN_FILES.delete(key); } catch (e2) {} /* no orphaned objects */
+          throw e;
+        }
+        const purged = await purgeOldReleases(env);
+        const row = await env.SPN_DB.prepare('SELECT * FROM releases WHERE id = ?').bind(id).first();
+        return json({ ok: true, release: releaseRow(row), purged });
+      }
+      if (/^releases\/[a-zA-Z0-9]+$/.test(route) && req.method === 'DELETE') {
+        if (session.user.role !== 'SuperUser') return json({ error: 'Super User required' }, 403);
+        const id = route.split('/')[1];
+        const row = await env.SPN_DB.prepare('SELECT r2_key FROM releases WHERE id = ?').bind(id).first();
+        if (row && row.r2_key && hasR2(env)) { try { await env.SPN_FILES.delete(row.r2_key); } catch (e) {} }
+        await env.SPN_DB.prepare('DELETE FROM releases WHERE id = ?').bind(id).run();
         return json({ ok: true });
       }
 
@@ -376,8 +574,17 @@ export default {
         const text = await req.text();
         if (text.length > 4000000) return json({ error: 'Collection too large' }, 413);
         JSON.parse(text);
+        /* optimistic concurrency: the client states which version it is updating;
+           if the stored copy differs, hand it back (409) so the client merges by record */
+        const base = req.headers.get('X-Base-Hash');
+        if (base) {
+          const row = await env.SPN_DB.prepare('SELECT json FROM collections WHERE name = ?').bind(name).first();
+          if (row && row.json && syncHash(row.json) !== base) {
+            return json({ error: 'Collection changed on the server', code: 'conflict', json: row.json, hash: syncHash(row.json) }, 409);
+          }
+        }
         await putCollection(env, name, text);
-        return json({ ok: true });
+        return json({ ok: true, hash: syncHash(text) });
       }
 
       if (route === 'users' && req.method === 'PUT') {
@@ -387,6 +594,16 @@ export default {
         const remove = (!Array.isArray(body) && body && Array.isArray(body.remove)) ? body.remove.map(String) : [];
         if (!Array.isArray(users) || !users.length) return json({ error: 'A non-empty user list is required' }, 400);
         if (remove.includes(session.userId)) return json({ error: 'You cannot remove your own account' }, 400);
+        if (users.some(u => !u || typeof u !== 'object' || !u.id)) return json({ error: 'Every user needs an id' }, 400);
+        /* role integrity: only the Super User can grant, revoke or remove the SuperUser role */
+        if (session.user.role !== 'SuperUser') {
+          const ids = [...new Set(users.map(u => String(u.id)).concat(remove))];
+          const rows = ids.length ? ((await env.SPN_DB.prepare(`SELECT id, json FROM users WHERE id IN (${ids.map(() => '?').join(',')})`).bind(...ids).all()).results || []) : [];
+          const roleOf = {}; rows.forEach(r => { try { roleOf[r.id] = JSON.parse(r.json).role; } catch (e) {} });
+          const escalates = users.some(u => (u.role === 'SuperUser' && roleOf[u.id] !== 'SuperUser') || (roleOf[u.id] === 'SuperUser' && u.role !== 'SuperUser'));
+          const removesSuper = remove.some(id => roleOf[id] === 'SuperUser');
+          if (escalates || removesSuper) return json({ error: 'Only the Super User can grant, revoke or remove the Super User role' }, 403);
+        }
         const now = Date.now();
         /* upsert only: rows registered after the client's snapshot are never deleted implicitly */
         const stmts = users.map(u => env.SPN_DB.prepare(
@@ -409,8 +626,23 @@ export default {
             env.SPN_DB.prepare('DELETE FROM sessions'),
             env.SPN_DB.prepare('DELETE FROM invites'),
             env.SPN_DB.prepare('DELETE FROM files'),
+            env.SPN_DB.prepare('DELETE FROM releases'),
             env.SPN_DB.prepare('DELETE FROM users'),
           ]);
+          if (hasR2(env)) {
+            /* best-effort purge of this workspace's images and app builds (only the
+               prefixes this Worker writes; anything else in the bucket is untouched) */
+            for (const prefix of ['img/', 'apk/']) {
+              try {
+                let cursor;
+                do {
+                  const page = await env.SPN_FILES.list({ prefix, cursor, limit: 1000 });
+                  if (page.objects.length) await env.SPN_FILES.delete(page.objects.map(o => o.key));
+                  cursor = page.truncated ? page.cursor : undefined;
+                } while (cursor);
+              } catch (e) {}
+            }
+          }
           return json({ ok: true, mode: 'factory' });
         }
         const placeholders = OPERATIONAL.map(() => '?').join(',');
@@ -440,5 +672,5 @@ export default {
     } catch (e) {
       return json({ error: 'Server error', detail: String((e && e.message) || e) }, 500);
     }
-  },
-};
+  }
+}

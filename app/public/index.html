@@ -195,15 +195,29 @@ a{color:var(--gold-deep);}
   padding:6px 13px 6px 9px;font-size:12px;color:var(--forest-deep);cursor:pointer;font-weight:500;transition:.13s;
 }
 .weather-chip:hover{background:var(--mint);}
+.offline-chip{display:flex;align-items:center;gap:7px;background:#FBEFD9;border:1px solid #E3C892;color:#7A5A12;border-radius:20px;padding:6px 11px;font-size:11.5px;font-weight:600;cursor:pointer;white-space:nowrap;}
+.offline-chip::before{content:'';width:7px;height:7px;border-radius:50%;background:#B08A3E;}
+.offline-chip.pending::before{background:#C8842A;box-shadow:0 0 0 3px rgba(200,132,42,.25);}
+.release-row{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--line);font-size:12.5px;flex-wrap:wrap;}
+.release-row:last-of-type{border-bottom:none;}
+.app-link{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:14px;padding:10px 12px;border:1px solid var(--line-soft);border-radius:10px;background:var(--mint-soft);font-size:12.4px;color:var(--forest-deep);}
+.app-link a{font-weight:600;color:var(--forest);}
 .weather-chip .wi{width:18px;height:18px;color:var(--forest);}
 .user-chip{display:flex;align-items:center;gap:9px;cursor:pointer;}
 .user-chip .un{font-size:12.6px;font-weight:600;color:var(--ink);line-height:1.2;}
 .user-chip .ur{font-size:10.4px;color:var(--muted);}
 .role-avatar{
-  width:32px;height:32px;border-radius:50%;flex:none;
+  width:32px;height:32px;border-radius:50%;flex:none;overflow:hidden;
   display:flex;align-items:center;justify-content:center;
   background:var(--mint);color:var(--forest-deep);font-weight:700;font-size:12px;font-family:var(--font-ui);
 }
+.role-avatar img{width:100%;height:100%;object-fit:cover;display:block;}
+.role-avatar svg{width:58%;height:58%;color:var(--forest);}
+.avatar-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(48px,1fr));gap:8px;}
+.avatar-opt{aspect-ratio:1;border-radius:12px;border:1px solid var(--line);background:var(--mint-soft);display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--forest);transition:.13s;}
+.avatar-opt svg{width:56%;height:56%;}
+.avatar-opt:hover{border-color:var(--sage);background:var(--mint);}
+.avatar-opt.on{border-color:var(--forest);box-shadow:0 0 0 2px var(--mint);background:var(--mint);}
 .logout-btn{background:none;border:1px solid var(--line);border-radius:8px;padding:7px 12px;font-size:11.5px;color:var(--muted);font-weight:500;transition:.13s;}
 .logout-btn:hover{border-color:var(--danger);color:var(--danger);}
 
@@ -419,6 +433,10 @@ table:not(.dtable) tbody tr:hover{background:var(--mint-soft);}
 .toast-wrap{position:fixed;top:18px;right:18px;z-index:400;display:flex;flex-direction:column;gap:8px;}
 .toast{background:var(--forest-deep);color:#EFF2E9;padding:11px 18px;border-radius:10px;font-size:12.5px;box-shadow:var(--shadow-2);display:flex;align-items:center;gap:8px;animation:toastin .2s ease;}
 .toast.err{background:var(--danger);color:#FFF3F1;}
+.toast.notif-pop{background:var(--surface);color:var(--ink);border:1px solid var(--line);align-items:flex-start;max-width:360px;cursor:pointer;padding:10px 12px;}
+.toast.notif-pop .alert-ico{width:30px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center;flex:none;}
+.toast.notif-pop .alert-ico svg{width:16px;height:16px;}
+.toast.notif-pop .x-close{margin-left:auto;background:none;border:none;font-size:16px;color:var(--muted);cursor:pointer;line-height:1;}
 @keyframes toastin{from{opacity:0;transform:translateY(-6px);}to{opacity:1;transform:none;}}
 
 /* ---------- Misc components ---------- */
@@ -657,6 +675,7 @@ body.sb-collapsed .shell{grid-template-columns:1fr;}
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M18 9a6 6 0 10-12 0c0 6-2 7-2 7h16s-2-1-2-7z"/><path d="M10 20a2 2 0 004 0"/></svg>
             <span class="bell-badge" id="bell-badge" style="display:none;">0</span>
           </button>
+          <div class="offline-chip" id="offline-chip" style="display:none;" onclick="offlineChipClick()" title="Changes are saved on this device and sync when the connection (or your session) is back. Tap to retry.">Offline</div>
           <div class="weather-chip" onclick="nav('weather')" title="Field conditions for the nursery"><svg class="wi" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M6 17a4 4 0 010-8 5 5 0 019.6-1.5A3.5 3.5 0 0118 15"/></svg><span id="wchip-text">Loading…</span></div>
           <div class="user-chip" onclick="nav('profile')"><div class="role-avatar" id="uc-avatar">?</div><div><div class="un" id="uc-name">-</div><div class="ur" id="uc-role">-</div></div></div>
           <button class="logout-btn" onclick="logout()">Sign out</button>
@@ -679,6 +698,7 @@ body.sb-collapsed .shell{grid-template-columns:1fr;}
 
 const ICONS = {
   dashboard:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>',
+  seed:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21c-5 0-8-3-8-8 0-4 3-8 8-10 5 2 8 6 8 10 0 5-3 8-8 8z"/><path d="M12 21V9"/><path d="M12 13c2 0 3-1 4-3M12 16c-2 0-3-1-4-3"/></svg>',
   sale:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7h18l-2 10a2 2 0 01-2 2H7a2 2 0 01-2-2L3 7z"/><path d="M8 7V5a4 4 0 018 0v2"/></svg>',
   leads:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 22s7-6.4 7-12a7 7 0 10-14 0c0 5.6 7 12 7 12z"/><circle cx="12" cy="10" r="2.5"/></svg>',
   sow:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 20V10M12 10c0-4 3-6 7-6-1 5-3 7-7 6zM12 14c0-3-2-5-6-5 0 4 2 6 6 5z"/></svg>',
@@ -727,6 +747,7 @@ const MODULES = [
   ]},
   {group:'Nursery', items:[
     {key:'sowing', label:'Sowing Data Entry', icon:'sow'},
+    {key:'seedinventory', label:'Seeds Inventory', icon:'seed'},
     {key:'sownstatus', label:'Sown Seed Status', icon:'status'},
     {key:'seedlingstock', label:'Seedling Stock', icon:'stock'},
   ]},
@@ -764,12 +785,12 @@ const ALL_MODULE_KEYS = MODULES.flatMap(g=>g.items.map(i=>i.key));
 const ROLE_DEFAULT_ACCESS = {
   Admin: [...ALL_MODULE_KEYS],
   SuperUser: [...ALL_MODULE_KEYS],
-  HOD: ['dashboard','sowing','sownstatus','seedlingstock','requisitions','reports','scouting','salesanalytics','livestock','acreage','irrigation','farm'],
+  HOD: ['dashboard','sowing','seedinventory','sownstatus','seedlingstock','requisitions','reports','scouting','salesanalytics','livestock','acreage','irrigation','farm'],
   HR: ['dashboard','hr','requisitions','reports','leadsmap','departments','salesanalytics'],
   Finance: ['dashboard','requisitions','reports'],
   Sales: ['dashboard','cashsale','leads','leadsmap','weather','salesanalytics'],
-  Agronomist: ['dashboard','sowing','sownstatus','scouting','weather','requisitions','leadsmap','livestock','acreage','irrigation','farm'],
-  Procurement: ['dashboard','procurement','consumables','requisitions','reports'],
+  Agronomist: ['dashboard','sowing','seedinventory','sownstatus','scouting','weather','requisitions','leadsmap','livestock','acreage','irrigation','farm'],
+  Procurement: ['dashboard','procurement','consumables','seedinventory','requisitions','reports'],
   Marketing: ['dashboard','leads','reports','leadsmap','salesanalytics'],
   Casual: ['weather'],
 };
@@ -784,14 +805,42 @@ function isSuper(){ return !!(CURRENT && CURRENT.role==='SuperUser'); }
 function canManage(){ return isSuper() || (CURRENT && CURRENT.role==='Admin'); }
 
 function uid(p){return p+'_'+Math.random().toString(36).slice(2,9);}
-function todayISO(){return new Date().toISOString().slice(0,10);}
+/* Dates are local calendar dates (Nairobi), never UTC: a sale at 01:00 belongs to
+   today, and the dashboard's "today" must be the same day the POS wrote. */
+function isoDate(d){ const dt = d instanceof Date ? d : new Date(d); return dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0')+'-'+String(dt.getDate()).padStart(2,'0'); }
+function todayISO(){return isoDate(new Date());}
 function fmtDate(d){ if(!d) return '-'; const dt=new Date(d+'T00:00:00'); return dt.toLocaleDateString('en-KE',{day:'2-digit',month:'short',year:'numeric'});}
 function fmtDT(ts){const dt=new Date(ts); return dt.toLocaleDateString('en-KE',{day:'2-digit',month:'short'})+' '+dt.toLocaleTimeString('en-KE',{hour:'2-digit',minute:'2-digit'});}
 function money(n){return 'KES ' + Number(n||0).toLocaleString('en-KE');}
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
-function initials(name){return name.split(' ').map(w=>w[0]).slice(0,2).join('').toUpperCase();}
-function addDays(n){const d=new Date(); d.setDate(d.getDate()+n); return d.toISOString().slice(0,10);}
-function addDaysTo(dateStr, n){ const d=new Date(dateStr+'T00:00:00'); d.setDate(d.getDate()+n); return d.toISOString().slice(0,10); }
+function initials(name){return String(name||'?').split(' ').filter(Boolean).map(w=>w[0]).slice(0,2).join('').toUpperCase() || '?';}
+/* Avatars: a user has none (initials), a nursery-themed preset, or an uploaded photo
+   ({type:'photo', src:'/api/files/<id>'}). Rendered everywhere through avatarInner(). */
+const AVATAR_PRESETS = {
+  seedling:{label:'Seedling', svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22V12"/><path d="M12 12c0-4-3-7-7-7 0 4 3 7 7 7z"/><path d="M12 12c0-4 3-7 7-7 0 4-3 7-7 7z"/></svg>'},
+  leaf:{label:'Leaf', svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20C8 6 14 4 20 4c0 8-4 14-12 14H4z"/><path d="M4 20c4-6 8-9 12-11"/></svg>'},
+  tree:{label:'Tree', svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22v-6"/><path d="M7 16l5-12 5 12H7z"/><path d="M9 11h6"/></svg>'},
+  flower:{label:'Flower', svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="11" r="2.2"/><circle cx="12" cy="5.6" r="2.2"/><circle cx="16.8" cy="8.3" r="2.2"/><circle cx="16.8" cy="13.7" r="2.2"/><circle cx="12" cy="16.4" r="2.2"/><circle cx="7.2" cy="13.7" r="2.2"/><circle cx="7.2" cy="8.3" r="2.2"/><path d="M12 18.6V22"/></svg>'},
+  sun:{label:'Sun', svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>'},
+  rain:{label:'Rain', svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M7 15a4 4 0 010-8 5 5 0 019.6-1.5A3.5 3.5 0 0118 13"/><path d="M8 17v3M12 18v3M16 17v3"/></svg>'},
+  sprout:{label:'Potted sprout', svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 14h10l-1 7H8l-1-7z"/><path d="M12 14V9"/><path d="M12 9c0-3-2-5-5-5 0 3 2 5 5 5z"/><path d="M12 9c0-3 2-5 5-5 0 3-2 5-5 5z"/></svg>'},
+  greenhouse:{label:'Greenhouse', svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21V11l9-7 9 7v10"/><path d="M3 21h18"/><path d="M7 21v-8h10v8"/><path d="M12 4v17"/></svg>'},
+  cow:{label:'Cow', svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8C4 7 3 5 4 3c2 1 3 2 4 4"/><path d="M18 8c2-1 3-3 2-5-2 1-3 2-4 4"/><ellipse cx="12" cy="13" rx="7" ry="6"/><ellipse cx="12" cy="16" rx="3" ry="1.7"/><circle cx="9.5" cy="11" r=".7" fill="currentColor"/><circle cx="14.5" cy="11" r=".7" fill="currentColor"/></svg>'},
+  goat:{label:'Goat', svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5L6 2M16 5l2-3"/><path d="M7 6h10l2 6-3 2v6H8v-6l-3-2 2-6z"/><circle cx="10" cy="10" r=".7" fill="currentColor"/><circle cx="14" cy="10" r=".7" fill="currentColor"/></svg>'},
+  tractor:{label:'Tractor', svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="17" r="3"/><circle cx="18" cy="18" r="2"/><path d="M10 17h6"/><path d="M4 14V9h7l2 5"/><path d="M11 9V5h4l2 9"/><path d="M20 16v-4h-3"/></svg>'},
+  bee:{label:'Bee', svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="14" rx="5" ry="6"/><path d="M8 12h8M8 15h8M8 18h8"/><path d="M9 7C6 4 3 6 4 9c1 2 4 1 5-2zM15 7c3-3 6-1 5 2-1 2-4 1-5-2z"/><path d="M10 4l2 3 2-3"/></svg>'},
+  water:{label:'Watering can', svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10h10v9a2 2 0 01-2 2H6a2 2 0 01-2-2v-9z"/><path d="M14 12l5-3v5l-5 1"/><path d="M7 10V7a3 3 0 016 0"/><path d="M20 6l1-2M22 8l2-1"/></svg>'},
+};
+function avatarInner(user){
+  const av = user && user.avatar;
+  if(av && av.type==='photo' && av.src) return `<img src="${esc(fileUrl(av.src))}" alt="">`;
+  if(av && av.type==='preset' && AVATAR_PRESETS[av.key]) return AVATAR_PRESETS[av.key].svg;
+  return esc(initials(user && user.name));
+}
+function avatarHTML(user, px, font){ return `<div class="role-avatar" style="width:${px}px;height:${px}px;font-size:${font||Math.round(px*0.36)}px;flex:none;">${avatarInner(user)}</div>`; }
+function moduleLabel(key){ if(key==='*') return 'All modules (not grantable by request)'; const it = MODULES.flatMap(g=>g.items).find(i=>i.key===key); return it? it.label : key; }
+function addDays(n){const d=new Date(); d.setDate(d.getDate()+n); return isoDate(d);}
+function addDaysTo(dateStr, n){ const d=new Date(dateStr+'T00:00:00'); d.setDate(d.getDate()+n); return isoDate(d); }
 /* status chip: dot + label */
 function st(color, label){ return `<span class="st st-${color}"><i></i>${esc(label)}</span>`; }
 
@@ -828,6 +877,7 @@ function defaultData(){
       {id:'c6', name:'Shade Net (50%) ', unit:'m²', qty:410, reorder:200, unitCost:95},
     ],
     seedlingStock:[],
+    seedInventory:[],
     livestockInventory:[
       {id:'lv1', tag:'COW-001', species:'dairy', breed:'Friesian', sex:'Female', dob:'2022-03-10', qty:1, weightKg:420, status:'Active', source:'Purchased', cost:120000, acquiredDate:'2023-05-15', notes:'Second lactation'},
       {id:'lv2', tag:'COW-002', species:'dairy', breed:'Ayrshire', sex:'Female', dob:'2023-01-22', qty:1, weightKg:380, status:'Active', source:'Born on farm', cost:0, acquiredDate:'2023-01-22', notes:''},
@@ -926,8 +976,10 @@ function generatePriceHistory(){
 const REPORT_DEFS = [
   {key:'production', name:'Nursery Production Report', desc:'Batches sown, germination rates and seedling output by crop - aligned to KEPHIS record-keeping requirements.', access:['Admin','HOD']},
   {key:'compliance', name:'Seed Compliance Register', desc:'Seed lot, source, certificate number and class per batch - Seeds & Plant Varieties Act traceability record.', access:['Admin','HOD']},
+  {key:'seeds', name:'Seeds Inventory Report', desc:'Seed lots on hand: crop, variety, supplier, lot and KEPHIS numbers, germination, received and expiry dates, quantity drawn by sowing vs remaining, lots needing attention.', access:['Admin','HOD','Procurement']},
   {key:'sales', name:'Cash Sales & VAT Summary', desc:'Daily/monthly sales register with VAT treatment notes, formatted for KRA filing support.', access:['Admin','HR']},
   {key:'stock', name:'Stock Valuation Report', desc:'Consumables and seedling stock on hand, valued at cost - for period-end reconciliation.', access:['Admin','Procurement']},
+  {key:'procurement', name:'Procurement Report', desc:'Purchase requests and orders: item, quantity, supplier, estimated cost, status, requested and delivered dates, with open and delivered totals.', access:['Admin','Procurement','Finance']},
   {key:'hr', name:'HR & Payroll Support Report', desc:'Staff headcount, permanent vs casual split, attendance-linked requisitions.', access:['Admin','HR']},
   {key:'quality', name:'GLOBALG.A.P. Readiness Checklist', desc:'Self-assessment against GLOBALG.A.P. crop-base module clauses for propagation material.', access:['Admin','HOD']},
   {key:'farm', name:'Farm Plots Report', desc:'Fields and plots: crop planted, date of planting, crop-day counter, development stage, expected harvest and rainfall received. Separate from nursery reporting; viewers are assigned individually.', access:[]},
@@ -937,28 +989,61 @@ const REPORT_DEFS = [
    Full-stack mode: when served by the Cloudflare Worker, /api/* provides login
    sessions and a shared KV-backed workspace, so every device sees the same data.
    Standalone mode: the same file falls back to browser localStorage. */
+/* Deployment config. On the web the API is same-origin (''). The SPN OS mobile app
+   (Capacitor) ships this same file inside the APK and injects window.SPN_CONFIG
+   with the Worker URL before this script runs. */
+const SPN_CONFIG = Object.assign({apiBase:'', mobile:false, appVersion:''}, window.SPN_CONFIG || {});
+const API_BASE = String(SPN_CONFIG.apiBase || '').replace(/\/+$/,'');
+const apiUrl = path => API_BASE + '/api/' + path;
+/* stored file references stay relative ('/api/files/<id>') so a change of Worker URL
+   never breaks them; they are made absolute only when rendered */
+const fileUrl = src => (src && typeof src==='string' && src.startsWith('/api/')) ? API_BASE + src : src;
+/* map links: on the phone a geo: URI opens whatever maps app is installed (Google
+   Maps, Petal Maps on Huawei/HMS, OsmAnd); in the browser, Google Maps */
+const mapsUrl = (lat, lng, label) => SPN_CONFIG.mobile ? `geo:${lat},${lng}?q=${lat},${lng}${label? '('+encodeURIComponent(label)+')' : ''}` : `https://www.google.com/maps?q=${lat},${lng}`;
 const API = {
   /* the token lives in localStorage so a signed-in session survives new tabs and
      browser restarts (the server still expires sessions after 7 days); storage
      access can throw in sandboxed contexts, so every access is try/catch guarded */
   token: (()=>{ try{ return localStorage.getItem('spn_token'); }catch(e){ return null; } })(),
   async req(path, opts={}){
-    const r = await fetch('/api/'+path, {
-      method: opts.method||'GET',
-      headers: Object.assign({'Content-Type':'application/json'}, API.token?{'Authorization':'Bearer '+API.token}:{}),
-      body: opts.body!==undefined? JSON.stringify(opts.body) : undefined,
-    });
+    /* optional timeout (ms): a stalled connection is treated like no connection */
+    const ctl = opts.timeoutMs ? new AbortController() : null;
+    const timer = ctl ? setTimeout(()=>ctl.abort(), opts.timeoutMs) : null;
+    let r;
+    try{
+      r = await fetch(apiUrl(path), {
+        method: opts.method||'GET',
+        headers: Object.assign({'Content-Type':'application/json'}, opts.headers||{}, API.token?{'Authorization':'Bearer '+API.token}:{}),
+        body: opts.body!==undefined? JSON.stringify(opts.body) : undefined,
+        signal: ctl ? ctl.signal : undefined,
+      });
+    } finally { if(timer) clearTimeout(timer); }
     if(!r.ok){
       let body=null; try{ body = await r.json(); }catch(e2){}
       const e=new Error((body && body.error) || ('API '+r.status));
-      e.status=r.status; e.code = body && body.code;
+      e.status=r.status; e.code = body && body.code; e.body = body;
       throw e;
+    }
+    return r.json();
+  },
+  /* raw binary upload (APK releases): the file is the body, metadata travels in headers */
+  async upload(path, body, headers){
+    const r = await fetch(apiUrl(path), {
+      method:'POST',
+      headers: Object.assign({}, headers||{}, API.token?{'Authorization':'Bearer '+API.token}:{}),
+      body,
+    });
+    if(!r.ok){
+      let b=null; try{ b = await r.json(); }catch(e2){}
+      const e=new Error((b && b.error) || ('Upload failed ('+r.status+')')); e.status=r.status; throw e;
     }
     return r.json();
   }
 };
 function rememberSession(token, userId){
   API.token = token;
+  SESSION_EXPIRED = false;
   try{ localStorage.setItem('spn_token', token); localStorage.setItem('spn_uid', userId); }catch(e){}
 }
 function forgetSession(){
@@ -968,7 +1053,17 @@ function forgetSession(){
 let SERVER_MODE = false;
 let EMAIL_ENABLED = false; /* server can send invitation emails itself */
 async function detectServer(){
-  try{ const h = await API.req('health'); SERVER_MODE = !!(h && h.ok); EMAIL_ENABLED = !!(h && h.email); }catch(e){ SERVER_MODE = false; }
+  try{
+    const h = await API.req('health', {timeoutMs: 8000});
+    SERVER_MODE = !!(h && h.ok); EMAIL_ENABLED = !!(h && h.email); OFFLINE = false;
+    if(SERVER_MODE){ try{ localStorage.setItem('spn_server_mode','1'); }catch(e){} }
+  }catch(e){
+    /* unreachable: a workspace that has used the server before (or the mobile app,
+       which always has one) goes OFFLINE instead of falling back to the demo mode */
+    let known = !!SPN_CONFIG.apiBase;
+    try{ known = known || localStorage.getItem('spn_server_mode')==='1'; }catch(e2){}
+    SERVER_MODE = known; OFFLINE = known;
+  }
   return SERVER_MODE;
 }
 /* In deployed (server) mode, AI requests are routed to the Worker's /api/ai proxy,
@@ -981,7 +1076,7 @@ window.fetch = function(input, init){
     const url = typeof input==='string' ? input : ((input && input.url) || '');
     if(url === 'https://api.anthropic.com/v1/messages' && SERVER_MODE){
       const headers = Object.assign({}, (init && init.headers) || {}, API.token ? {'Authorization':'Bearer '+API.token} : {});
-      return nativeFetch('/api/ai', Object.assign({}, init, {headers}));
+      return nativeFetch(apiUrl('ai'), Object.assign({}, init, {headers}));
     }
   }catch(e){}
   return nativeFetch(input, init);
@@ -1027,48 +1122,310 @@ async function loadData(){
 /* activityStats is NOT in this list: every user writes it constantly, so syncing the
    whole object would make sessions overwrite each other; increments go through the
    server-merged /api/activity route instead */
-const COLLECTION_KEYS = ['departments','staff','consumables','seedlingStock','livestockInventory','farmPlots','rainfallLog','reportAccess','sowingRecords','cashSales','procurement','requisitions','leads','auditLog','reportsAccessList','accessRequests','aiScans','weatherLocation','salesHistory','priceHistory','companyKraPin','leadsMonthlyTarget','org'];
+const COLLECTION_KEYS = ['departments','staff','consumables','seedlingStock','seedInventory','livestockInventory','farmPlots','rainfallLog','reportAccess','sowingRecords','cashSales','procurement','requisitions','leads','auditLog','reportsAccessList','accessRequests','aiScans','weatherLocation','salesHistory','priceHistory','companyKraPin','leadsMonthlyTarget','org'];
+/* ---------------- sync state ----------------
+   SYNC_BASE: per collection, a hash of the last state known to be on the server
+   (persisted as spn_sync_base). SYNC_SNAPSHOT: the matching JSON, persisted per
+   collection (spn_snap_<name>) so that a 3-way merge base exists even after the
+   app is closed and reopened, online or offline. Both are updated together on
+   every successful write and on every full load from the server, so an offline
+   user's edits never wipe what colleagues did in the meantime. */
 let SYNC_BASE = {};
+let SYNC_SNAPSHOT = {};
 let PENDING_ACTIVITY = 0;
+let OFFLINE = false;          /* server known but unreachable: keep working, sync later */
+let SESSION_EXPIRED = false;  /* the server rejected the token: keep working, sign in to sync */
+let SYNCING = false;          /* a merged push is in progress: plain writes wait */
+let PENDING_LOCAL = false;    /* computed at boot: this device holds unsynced work */
+const DIRTY_MARK = 'dirty';
+function syncHash(s){
+  let h1 = 0x811c9dc5, h2 = 0x1b873593;
+  for(let i=0;i<s.length;i++){ const c = s.charCodeAt(i); h1 = Math.imul(h1 ^ c, 16777619); h2 = Math.imul(h2 ^ c, 0x5bd1e995) ^ (h2 >>> 13); }
+  return (h1>>>0).toString(36)+'.'+(h2>>>0).toString(36)+'.'+s.length;
+}
+const snapKey = k => 'spn_snap_'+k;
+function persistSyncBase(){ try{ localStorage.setItem('spn_sync_base', JSON.stringify(SYNC_BASE)); }catch(e){} }
+function loadSyncBase(){ try{ const raw = localStorage.getItem('spn_sync_base'); SYNC_BASE = raw ? JSON.parse(raw) : {}; }catch(e){ SYNC_BASE = {}; } }
+async function loadSyncSnapshot(){
+  SYNC_SNAPSHOT = {};
+  for(const k of COLLECTION_KEYS.concat(['__users'])){ try{ const j = await store.get(snapKey(k)); if(j) SYNC_SNAPSHOT[k] = j; }catch(e){} }
+}
+/* record that the server now holds exactly this JSON for collection k */
+function setSynced(k, j){ SYNC_BASE[k] = syncHash(j); SYNC_SNAPSHOT[k] = j; persistSyncBase(); store.set(snapKey(k), j); }
 function markSynced(){
-  SYNC_BASE = {};
-  COLLECTION_KEYS.forEach(k=>{ SYNC_BASE[k] = JSON.stringify(DATA[k]); });
-  SYNC_BASE.__users = JSON.stringify(DATA.users);
+  SYNC_BASE = {}; SYNC_SNAPSHOT = {};
+  COLLECTION_KEYS.forEach(k=>{ setSynced(k, JSON.stringify(DATA[k])); });
+  setSynced('__users', JSON.stringify(DATA.users));
 }
-let saveTimer=null;
+/* every collection must be written on the next sync (first-run setup, clearing
+   operational data); the snapshots stay as the merge base */
+function markAllDirty(){ COLLECTION_KEYS.forEach(k=>{ SYNC_BASE[k] = DIRTY_MARK; }); SYNC_BASE.__users = DIRTY_MARK; persistSyncBase(); }
+function clearLocalSyncState(){
+  SYNC_BASE = {}; SYNC_SNAPSHOT = {};
+  try{ localStorage.removeItem('spn_sync_base'); localStorage.removeItem('spn_offline_base'); localStorage.removeItem('spn_weather_cache'); }catch(e){}
+  COLLECTION_KEYS.concat(['__users']).forEach(k=>{ try{ localStorage.removeItem(snapKey(k)); }catch(e){} });
+}
+function parseSnap(k){ try{ return SYNC_SNAPSHOT[k]!=null ? JSON.parse(SYNC_SNAPSHOT[k]) : null; }catch(e){ return null; } }
+/* collections whose content differs from what the server last confirmed. A device
+   that has never synced (fresh browser, standalone mode) has nothing to push. */
+function dirtyCollections(){
+  if(!DATA || !Object.keys(SYNC_BASE).length) return [];
+  return COLLECTION_KEYS.filter(k=> SYNC_BASE[k] !== syncHash(JSON.stringify(DATA[k])));
+}
+function usersDirty(){ return !!(DATA && Object.keys(SYNC_BASE).length && SYNC_BASE.__users !== syncHash(JSON.stringify(DATA.users))); }
+function hasLocalUnsynced(){ return dirtyCollections().length>0 || usersDirty() || pendingPhotoCount()>0 || pendingProfileCount()>0; }
+const isNetworkError = e => !e || !e.status;
+let saveTimer=null, retryTimer=null;
 function saveData(){
+  if(typeof updateBell==='function') updateBell(); /* the bell reflects every change immediately */
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(async ()=>{
-    let ok = await store.set(STORE_KEY, JSON.stringify(DATA));
-    if(SERVER_MODE && API.token){
-      try{
-        const puts = [];
-        COLLECTION_KEYS.forEach(k=>{
-          const j = JSON.stringify(DATA[k]);
-          if(SYNC_BASE[k] !== j){
-            puts.push(API.req('collections/'+k, {method:'PUT', body:DATA[k]}).then(()=>{ SYNC_BASE[k]=j; }));
-          }
-        });
-        const uj = JSON.stringify(DATA.users);
-        if(SYNC_BASE.__users !== uj){
-          if(canManage()){ puts.push(API.req('users', {method:'PUT', body:DATA.users}).then(()=>{ SYNC_BASE.__users=uj; })); }
-          else { SYNC_BASE.__users = uj; }
-        }
-        if(PENDING_ACTIVITY>0 && CURRENT){
-          const inc = PENDING_ACTIVITY; PENDING_ACTIVITY = 0;
-          const uidNow = CURRENT.id;
-          puts.push(API.req('activity', {method:'POST', body:{inc}}).then(res=>{
-            if(res && typeof res.total==='number'){ DATA.activityStats = DATA.activityStats||{}; DATA.activityStats[uidNow] = res.total; }
-          }).catch(e=>{ PENDING_ACTIVITY += inc; }));
-        }
-        await Promise.all(puts);
-        ok = true;
-      }
-      catch(e){ console.error('server save failed', e); toast('Server save failed - keeping the local copy.','err'); }
-    }
-    if(!ok){ console.error('save failed'); toast('Could not save - working in-memory only.','err'); }
-  }, 150);
+  saveTimer = setTimeout(()=>{ flushSave(); }, 150);
 }
+/* write the whole workspace to the device store, then the changed collections to
+   the server; resolves true only when everything the server should have, it has */
+async function flushSave(){
+  let ok = await store.set(STORE_KEY, JSON.stringify(DATA));
+  if(!(SERVER_MODE && API.token) || OFFLINE || SESSION_EXPIRED || SYNCING){ updateOfflineChip(); if(!ok) toast('Could not save - working in-memory only.','err'); return ok; }
+  let serverOk = true;
+  try{
+    const puts = [];
+    COLLECTION_KEYS.forEach(k=>{
+      const j = JSON.stringify(DATA[k]); const hj = syncHash(j);
+      if(SYNC_BASE[k] !== hj) puts.push(putCollectionSync(k));
+    });
+    const ujson = JSON.stringify(DATA.users), uj = syncHash(ujson);
+    if(SYNC_BASE.__users !== uj){
+      if(canManage()) puts.push(API.req('users', {method:'PUT', body:DATA.users}).then(()=>{ setSynced('__users', ujson); }));
+      else setSynced('__users', ujson); /* only admins can write users; nothing to push */
+    }
+    if(PENDING_ACTIVITY>0 && CURRENT){
+      const inc = PENDING_ACTIVITY; PENDING_ACTIVITY = 0;
+      const uidNow = CURRENT.id;
+      puts.push(API.req('activity', {method:'POST', body:{inc}}).then(res=>{
+        if(res && typeof res.total==='number'){ DATA.activityStats = DATA.activityStats||{}; DATA.activityStats[uidNow] = res.total; }
+      }).catch(e=>{ PENDING_ACTIVITY += inc; }));
+    }
+    const results = await Promise.allSettled(puts);
+    const failed = results.filter(r=>r.status==='rejected').map(r=>r.reason);
+    if(failed.length){
+      serverOk = false;
+      if(failed.some(isNetworkError)) goOffline();
+      else if(failed.some(e=>e && e.status===401)) sessionExpired();
+      else { console.error('server save failed', failed[0]); toast('Server save failed - keeping the local copy; it will be retried.','err'); scheduleRetry(); }
+    }
+  }catch(e){ serverOk = false; if(isNetworkError(e)) goOffline(); else console.error('server save failed', e); }
+  if(MERGED_ON_SAVE){
+    /* a colleague's change was merged in while saving: show it, in place */
+    MERGED_ON_SAVE = false;
+    const key = document.getElementById('view-root')?.dataset.view;
+    if(key && CURRENT && !document.getElementById('active-modal') && !document.querySelector('.drawer')) nav(key, {keepScroll:true});
+  }
+  updateOfflineChip();
+  if(!ok){ console.error('save failed'); toast('Could not save - working in-memory only.','err'); }
+  return ok && serverOk;
+}
+/* One collection to the server with optimistic concurrency: the PUT carries the hash
+   of the version this device last synced; if a colleague wrote in between the server
+   answers 409 with its copy, which is merged per record (mergeOffline) and re-sent.
+   Nobody's sale, lead or sowing record is lost to a last-writer-wins overwrite. */
+let MERGED_ON_SAVE = false;
+async function putCollectionSync(k){
+  let j = JSON.stringify(DATA[k]);
+  let base = (SYNC_BASE[k] && SYNC_BASE[k]!==DIRTY_MARK) ? SYNC_BASE[k] : '';
+  for(let attempt=0; attempt<3; attempt++){
+    try{
+      await API.req('collections/'+k, {method:'PUT', body:DATA[k], headers: base? {'X-Base-Hash': base} : {}});
+      setSynced(k, j);
+      return true;
+    }catch(e){
+      if(e && e.status===409 && e.body && typeof e.body.json==='string'){
+        let server = null; try{ server = JSON.parse(e.body.json); }catch(e2){}
+        DATA[k] = mergeOffline(k, parseSnap(k), DATA[k], server);
+        SYNC_SNAPSHOT[k] = e.body.json;
+        base = e.body.hash || syncHash(e.body.json);
+        j = JSON.stringify(DATA[k]);
+        MERGED_ON_SAVE = true;
+        continue;
+      }
+      throw e;
+    }
+  }
+  const err = new Error('Collection '+k+' kept changing on the server; will retry'); err.status = 409; throw err;
+}
+function scheduleRetry(ms){ clearTimeout(retryTimer); retryTimer = setTimeout(()=>{ if(!OFFLINE && !SESSION_EXPIRED && CURRENT && hasLocalUnsynced()) flushSave(); }, ms||30000); }
+
+/* ---------------- offline mode ----------------
+   Every save already lands in the device store, so going offline only means: stop
+   talking to the server and keep probing. Reconnecting merges the local changes
+   against the live server copy (3-way, per record), pushes them, then pulls. */
+let reconnectTimer = null, RECONNECTING = false;
+function goOffline(){
+  if(OFFLINE) return;
+  OFFLINE = true; updateOfflineChip();
+  toast('Connection lost - working offline. Changes are saved on this device and sync automatically later.');
+  scheduleReconnect();
+}
+function sessionExpired(){
+  if(SESSION_EXPIRED) return;
+  SESSION_EXPIRED = true; updateOfflineChip();
+  toast('Your session has expired. Sign in again to continue syncing - your changes stay on this device.','err');
+}
+function scheduleReconnect(ms){ clearTimeout(reconnectTimer); reconnectTimer = setTimeout(()=>tryReconnect(), ms||15000); }
+async function tryReconnect(manual){
+  if(!OFFLINE || RECONNECTING) return;
+  RECONNECTING = true;
+  try{
+    const h = await API.req('health', {timeoutMs:8000});
+    if(h && h.ok){
+      if(!CURRENT){ OFFLINE = false; location.reload(); return; } /* at the login screen: start over online */
+      await flushOffline();
+      return;
+    }
+  }catch(e){}
+  finally{ RECONNECTING = false; }
+  if(manual) toast('Still offline. Your changes stay saved on this device.','err');
+  scheduleReconnect();
+}
+window.addEventListener('online', ()=>{ if(OFFLINE) tryReconnect(); });
+/* 3-way merge of one collection: base = last synced, local = this device, server = now.
+   Records this user added/changed/deleted win for those records only; everything
+   else follows the server. Collections without ids fall back to "local wins". */
+function mergeOffline(key, base, local, server){
+  if(server===undefined || server===null) return local;
+  /* records are matched by id; seeded records without an id match by name, and
+     anything else by content (an edit to such a record reads as remove + add) */
+  const recKey = x => (x && typeof x==='object') ? (x.id!==undefined ? 'id:'+x.id : (x.name!==undefined ? 'name:'+x.name : 'json:'+JSON.stringify(x))) : 'json:'+JSON.stringify(x);
+  if(key==='auditLog' && Array.isArray(local) && Array.isArray(server)){
+    const seen = new Set();
+    const all = [...local, ...server].filter(e=>{ const k=(e.ts||'')+'|'+(e.user||'')+'|'+(e.action||''); if(seen.has(k)) return false; seen.add(k); return true; });
+    return all.sort((a,b)=>(b.ts||0)-(a.ts||0)).slice(0,300);
+  }
+  /* any array (records, or plain values such as department names): per-item merge */
+  const isRecArray = a => Array.isArray(a);
+  if(isRecArray(local) && isRecArray(server) && (base===null || isRecArray(base))){
+    const baseMap = new Map((base||[]).map(x=>[recKey(x), JSON.stringify(x)]));
+    const localMap = new Map(local.map(x=>[recKey(x), x]));
+    const out = new Map(server.map(x=>[recKey(x), x]));
+    if(base) base.forEach(x=>{ const k = recKey(x); if(!localMap.has(k)) out.delete(k); });
+    local.forEach(x=>{ const k = recKey(x); const b = baseMap.get(k); if(b===undefined || b!==JSON.stringify(x)) out.set(k, x); });
+    const order = [...local.map(recKey), ...server.map(recKey).filter(k=>!localMap.has(k))];
+    const seen = new Set();
+    return order.filter(k=>{ if(!out.has(k) || seen.has(k)) return false; seen.add(k); return true; }).map(k=>out.get(k));
+  }
+  return local;
+}
+/* push this device's unsynced work to the server (merge first). Resolves with the
+   number of synced items; rejects when the push did not complete, so callers never
+   pull the server copy over unsynced local work. */
+async function pushLocalChanges(actor){
+  if(!SERVER_MODE || !API.token || !DATA) return 0;
+  const dirty = dirtyCollections();
+  const uDirty = usersDirty();
+  const photos = pendingPhotoCount();
+  const profile = pendingProfileCount();
+  if(!dirty.length && !uDirty && !photos && !profile && PENDING_ACTIVITY<=0) return 0;
+  SYNCING = true;
+  try{
+    if(profile) await flushPendingProfile(); /* own profile first, so the users pull below already carries it */
+    if(dirty.length || uDirty){
+      const st = await API.req('state');
+      const server = (st && st.collections) || {};
+      dirty.forEach(k=>{ DATA[k] = mergeOffline(k, parseSnap(k), DATA[k], server[k]); });
+      if(uDirty){
+        const me = actor || CURRENT;
+        const manager = !!(me && (me.role==='SuperUser' || me.role==='Admin'));
+        const merged = mergeOffline('users', parseSnap('__users'), DATA.users, st.users||[]);
+        if(manager){ await API.req('users', {method:'PUT', body:merged}); DATA.users = merged; setSynced('__users', JSON.stringify(merged)); }
+        else { DATA.users = st.users || DATA.users; setSynced('__users', JSON.stringify(DATA.users)); }
+      }
+    }
+    OFFLINE = false; SYNCING = false;
+    await flushPendingPhotos();
+    const ok = await flushSave();
+    if(!ok){
+      if(OFFLINE) throw new TypeError('Network request failed');
+      const e = new Error('Some changes could not be saved to the server'); e.status = SESSION_EXPIRED ? 401 : 500; throw e;
+    }
+    return dirty.length + (uDirty?1:0) + photos + profile;
+  } finally { SYNCING = false; }
+}
+async function flushOffline(){
+  let n = 0;
+  try{ n = await pushLocalChanges(CURRENT); }
+  catch(e){
+    if(isNetworkError(e)){ OFFLINE = true; updateOfflineChip(); scheduleReconnect(); return; }
+    OFFLINE = false; updateOfflineChip();
+    if(e && e.status===401){ sessionExpired(); return; }
+    toast('Back online, but some offline changes could not be synced yet - they stay on this device and will be retried.','err');
+    scheduleRetry(); return;
+  }
+  OFFLINE = false; updateOfflineChip();
+  try{ await refreshFromServer(); }catch(e){ if(isNetworkError(e)){ goOffline(); return; } }
+  toast(n? `Back online - ${n} offline change${n===1?'':'s'} synced.` : 'Back online.');
+}
+function updateOfflineChip(){
+  if(typeof updateBell==='function') updateBell();
+  const el = document.getElementById('offline-chip'); if(!el) return;
+  if(!SERVER_MODE){ el.style.display='none'; return; }
+  const n = DATA ? dirtyCollections().length + (usersDirty()?1:0) + pendingPhotoCount() + pendingProfileCount() : 0;
+  if(SESSION_EXPIRED){ el.style.display='flex'; el.classList.add('pending'); el.textContent = n? `Session expired · ${n} to sync - sign in` : 'Session expired - sign in again'; return; }
+  if(OFFLINE){ el.style.display='flex'; el.classList.toggle('pending', n>0); el.textContent = n? `Offline · ${n} to sync` : 'Offline'; return; }
+  if(n){ el.style.display='flex'; el.classList.add('pending'); el.textContent = `${n} to sync`; return; }
+  el.style.display='none';
+}
+function offlineChipClick(){
+  if(SESSION_EXPIRED){ logout(); return; }
+  if(OFFLINE){ tryReconnect(true); return; }
+  toast('Retrying the server save…'); flushSave();
+}
+/* offline photo queue: photos taken offline stay inline until they can be uploaded */
+function pendingPhotoCount(){
+  if(!DATA || !Array.isArray(DATA.livestockInventory)) return 0;
+  return DATA.livestockInventory.reduce((n,a)=> n + ((a.photos||[]).filter(p=>p.pending && String(p.src||'').startsWith('data:')).length), 0);
+}
+async function flushPendingPhotos(){
+  if(!SERVER_MODE || !API.token || OFFLINE || !pendingPhotoCount()) return;
+  for(const a of (DATA.livestockInventory||[])){
+    for(const ph of (a.photos||[])){
+      if(ph.pending && String(ph.src||'').startsWith('data:')){
+        const res = await API.req('files', {method:'POST', body:{mime:'image/jpeg', data:ph.src.split(',')[1]}});
+        ph.src = '/api/files/'+res.id; ph.fileId = res.id; delete ph.pending;
+      }
+    }
+  }
+}
+/* pull the latest workspace and redraw in place only if something changed; never
+   while the user is inside a dialog or while this device holds unsynced work */
+let refreshTimer = null;
+async function refreshFromServer(){
+  if(!SERVER_MODE || !API.token || !CURRENT || OFFLINE || SESSION_EXPIRED) return;
+  if(document.getElementById('active-modal') || document.querySelector('.drawer') || hasLocalUnsynced()){
+    clearTimeout(refreshTimer); refreshTimer = setTimeout(()=>{ refreshFromServer().catch(()=>{}); }, 20000);
+    return;
+  }
+  const uidNow = CURRENT.id;
+  const snapshot = ()=>JSON.stringify([DATA.users, ...COLLECTION_KEYS.map(k=>DATA[k])]);
+  const before = snapshot(), accessBefore = JSON.stringify(CURRENT.access);
+  await loadServerState();
+  CURRENT = DATA.users.find(u=>u.id===uidNow) || CURRENT;
+  if(JSON.stringify(CURRENT.access)!==accessBefore) buildSidebar();
+  if(snapshot()!==before){
+    const key = document.querySelector('.sb-item.active')?.dataset.key;
+    if(key) nav(key, {keepScroll:true});
+  }
+}
+/* Other devices' work (a sale on a sales rep's phone, a sowing record from the
+   nursery) reaches this screen without a reload: a quiet pull on every module
+   change and every two minutes while online; nothing is redrawn unless changed. */
+let lastPull = 0;
+async function pullIfStale(minMs){
+  if(!SERVER_MODE || !API.token || !CURRENT || OFFLINE || SESSION_EXPIRED || SYNCING) return;
+  if(Date.now() - lastPull < (minMs||0)) return;
+  lastPull = Date.now();
+  try{ await refreshFromServer(); }catch(e){ if(isNetworkError(e)) goOffline(); }
+}
+setInterval(()=>{ pullIfStale(110000); }, 120000);
+
 function logActivity(action){
   DATA.auditLog.unshift({ts:Date.now(), user:CURRENT? CURRENT.name : 'Unknown', action});
   if(DATA.auditLog.length>300) DATA.auditLog.length=300;
@@ -1122,28 +1479,15 @@ function deleteRecord(arrayKey, id, rerenderFnName){
    locally (no unsynced changes, no open dialog, no pending activity). */
 let lastFocusSync = 0;
 window.addEventListener('focus', async ()=>{
-  if(!SERVER_MODE || !API.token || !CURRENT) return;
+  if(!SERVER_MODE || !API.token || !CURRENT || OFFLINE) return;
   if(Date.now()-lastFocusSync < 60000) return;
   if(document.getElementById('active-modal') || document.querySelector('.drawer')) return;
-  const dirty = COLLECTION_KEYS.some(k=>SYNC_BASE[k]!==JSON.stringify(DATA[k]))
-    || SYNC_BASE.__users!==JSON.stringify(DATA.users) || PENDING_ACTIVITY>0;
-  if(dirty) return;
+  if(hasLocalUnsynced() || PENDING_ACTIVITY>0) return;
   lastFocusSync = Date.now();
-  try{
-    const uidNow = CURRENT.id;
-    const snapshot = ()=>JSON.stringify([DATA.users, ...COLLECTION_KEYS.map(k=>DATA[k])]);
-    const before = snapshot(), accessBefore = JSON.stringify(CURRENT.access);
-    await loadServerState();
-    CURRENT = DATA.users.find(u=>u.id===uidNow) || CURRENT;
-    /* Only redraw when the server actually had something new, and then in place:
-       an unchanged page must not jump or lose half-typed inputs just because the
-       tab was focused again. */
-    if(JSON.stringify(CURRENT.access)!==accessBefore) buildSidebar();
-    if(snapshot()!==before){
-      const key = document.querySelector('.sb-item.active')?.dataset.key;
-      if(key) nav(key, {keepScroll:true});
-    }
-  }catch(e){}
+  /* Only redraw when the server actually had something new, and then in place:
+     an unchanged page must not jump or lose half-typed inputs just because the
+     tab was focused again. */
+  try{ await refreshFromServer(); }catch(e){ if(isNetworkError(e)) goOffline(); }
 });
 
 /* ---------------- toast ---------------- */
@@ -1270,8 +1614,11 @@ function renderLogin(){
         <div class="ds-label">First time here?</div>
         <button type="button" class="demo-chip" onclick="setLoginView('register')">Register your account · pick your role</button>
       </div>
+      ${OFFLINE? `<div class="app-link" style="background:#FBEFD9;border-color:#E3C892;color:#7A5A12;">You are offline. Signing in needs a connection; if you signed in before on this device, SPN OS opens automatically while offline. <a href="#" onclick="tryReconnect(true);return false;" style="color:#7A5A12;">Retry</a></div>` : ''}
+      <div id="login-app-link"></div>
       <div class="login-foot">You stay signed in on this browser for up to 7 days. Passwords are set once at registration and work on every device.</div>`;
     refreshLoginDirectory();
+    loadAppLink('login-app-link');
     return;
   }
   body.innerHTML = `
@@ -1296,6 +1643,7 @@ function renderLogin(){
       <div class="demo-chips">${DATA.users.map(u=>`<button type="button" class="demo-chip" onclick="quickLogin('${u.id}')">${esc(u.name.split(' ')[0])} · ${esc(u.role)}</button>`).join('')}</div>
     </div>
     <div class="login-foot">Demo workspace: data is saved to your browser. Demo password for all accounts: <b class="mono">spn2026</b>. Deploy to Cloudflare for the production database and per-user passwords.</div>`;
+  loadAppLink('login-app-link');
 }
 function quickLogin(userId){
   if(SERVER_MODE) return; /* demo shortcut is standalone-only */
@@ -1324,10 +1672,24 @@ async function submitLogin(ev){
   const pass = document.getElementById('login-pass').value.trim();
   const errEl = document.getElementById('login-error');
   if(SERVER_MODE){
+    if(OFFLINE){ loginError('You are offline. Connect to the internet to sign in.'); return false; }
     try{
       const res = await API.req('login', {method:'POST', body:{userId, password:pass}});
       rememberSession(res.token, userId);
-      await loadServerState();
+      /* a device that still holds unsynced work pushes it (merged) before pulling;
+         if that push cannot complete, keep working on the local copy rather than
+         replacing it with the server's */
+      const me = (DATA && Array.isArray(DATA.users)) ? DATA.users.find(u=>u.id===userId) : null;
+      let keepLocal = false;
+      if(hasLocalUnsynced()){
+        try{ await pushLocalChanges(me); }
+        catch(e){
+          if(isNetworkError(e)) throw e;
+          keepLocal = !!me;
+          toast('Some changes made offline could not be synced yet - they stay on this device and will be retried.','err');
+        }
+      }
+      if(keepLocal) scheduleRetry(); else await loadServerState();
       if(errEl) errEl.style.display='none';
       login(userId);
       if(res.mustChange) openChangePasswordModal(true);
@@ -1364,7 +1726,7 @@ async function submitSetup(ev){
     DATA = emptyWorkspace();
     DATA.users = [user];
     DATA.org = org;
-    SYNC_BASE = {}; /* force a full first sync of the clean workspace */
+    markAllDirty(); /* force a full first sync of the clean workspace */
     saveData();
     login(user.id);
     openModal('Workspace created', `
@@ -1420,7 +1782,7 @@ async function submitRegister(ev){
 }
 function emptyWorkspace(){
   const d = defaultData();
-  ['staff','consumables','seedlingStock','livestockInventory','farmPlots','rainfallLog','sowingRecords','cashSales','procurement','requisitions','leads','accessRequests','aiScans','salesHistory','priceHistory'].forEach(k=>{ d[k]=[]; });
+  ['staff','consumables','seedlingStock','seedInventory','livestockInventory','farmPlots','rainfallLog','sowingRecords','cashSales','procurement','requisitions','leads','accessRequests','aiScans','salesHistory','priceHistory'].forEach(k=>{ d[k]=[]; });
   d.users = [];
   d.activityStats = {};
   d.auditLog = [{ts:Date.now(), user:'System', action:'Workspace initialised for production use.'}];
@@ -1428,7 +1790,7 @@ function emptyWorkspace(){
 }
 function loadDemoDataset(){
   const demo = defaultData();
-  ['staff','consumables','seedlingStock','livestockInventory','farmPlots','rainfallLog','sowingRecords','cashSales','procurement','requisitions','leads','salesHistory','priceHistory','departments'].forEach(k=>{ DATA[k]=demo[k]; });
+  ['staff','consumables','seedlingStock','seedInventory','livestockInventory','farmPlots','rainfallLog','sowingRecords','cashSales','procurement','requisitions','leads','salesHistory','priceHistory','departments'].forEach(k=>{ DATA[k]=demo[k]; });
   logActivity(`${CURRENT.name} loaded the demo dataset.`);
   saveData();
   nav('dashboard');
@@ -1461,14 +1823,19 @@ function openChangePasswordModal(force){
 function login(userId, resumed){
   CURRENT = DATA.users.find(u=>u.id===userId);
   if(!CURRENT){ toast('Account not found.','err'); return; }
+  /* modules added in newer versions: anyone who records sowing also sees the seed lots */
+  CURRENT.access = CURRENT.access || [];
+  if(CURRENT.access.includes('sowing') && !CURRENT.access.includes('seedinventory')) CURRENT.access.push('seedinventory');
   document.getElementById('login-screen').style.display='none';
   document.getElementById('app').style.display='block';
-  document.getElementById('uc-avatar').textContent = initials(CURRENT.name);
+  document.getElementById('uc-avatar').innerHTML = avatarInner(CURRENT);
   document.getElementById('uc-name').textContent = CURRENT.name;
   document.getElementById('uc-role').textContent = CURRENT.designation;
   if(!resumed) logActivity(`${CURRENT.name} signed in (${CURRENT.role}).`);
   try{ if(localStorage.getItem('spn_sb_collapsed')==='1') document.body.classList.add('sb-collapsed'); }catch(e){}
   buildSidebar();
+  updateOfflineChip();
+  if(SPN_CONFIG.mobile && SERVER_MODE && !OFFLINE){ fetchReleases().then(()=>updateBell()).catch(()=>{}); } /* "update available" notification on the phone */
   /* reopen the module in the URL hash after a reload / app re-entry when the user may see it */
   const wanted = (location.hash||'').replace('#','');
   const first = CURRENT.access.includes('dashboard') ? 'dashboard' : (CURRENT.access[0] || 'dashboard');
@@ -1476,6 +1843,7 @@ function login(userId, resumed){
   loadWeatherChip();
 }
 function logout(){
+  if(OFFLINE && CURRENT && !confirm('You are offline. After signing out you cannot sign in again until the connection is back. Sign out anyway? (Unsynced changes stay on this device.)')) return;
   if(CURRENT) logActivity(`${CURRENT.name} signed out.`);
   CURRENT=null;
   loginView = 'signin';
@@ -1492,7 +1860,7 @@ function buildSidebar(){
   const nav_ = document.getElementById('sb-nav');
   const keepTop = nav_.scrollTop; /* rebuilding the list must not lose the user's place in it */
   /* restricted modules are hidden entirely; access is requested through one modal */
-  const lockedCount = ALL_MODULE_KEYS.filter(k=>!CURRENT.access.includes(k)).length;
+  const lockedCount = ALL_MODULE_KEYS.filter(k=>!CURRENT.access.includes(k) && isRequestable(k)).length;
   nav_.innerHTML = MODULES.map(g=>{
     const items = g.items.filter(it=>CURRENT.access.includes(it.key));
     if(!items.length) return '';
@@ -1525,20 +1893,25 @@ function toggleSidebar(){
 function closeMobileSidebar(){ document.body.classList.remove('sb-open'); }
 function openRequestAccessModal(){
   closeMobileSidebar(); /* on phones the modal would otherwise open behind the open sidebar and its scrim */
-  const locked = MODULES.flatMap(g=>g.items).filter(it=>!CURRENT.access.includes(it.key));
+  const locked = MODULES.flatMap(g=>g.items).filter(it=>!CURRENT.access.includes(it.key) && isRequestable(it.key));
   openModal('Request module access', `
-    <p style="margin:0 0 12px;font-size:12.7px;line-height:1.6;">Modules outside your access are hidden from your navigation. Send a request and the Admin/MD will see it in their approvals queue.</p>
+    <p style="margin:0 0 12px;font-size:12.7px;line-height:1.6;">Modules outside your access are hidden from your navigation. Send a request and the Admin/MD will see it in their approvals queue. Administration pages (Users &amp; Access, Departments, Audit Log) are assigned directly by the Admin and cannot be requested here.</p>
     ${locked.map(it=>{
       const pending = DATA.accessRequests.some(r=>r.userId===CURRENT.id && r.moduleKey===it.key && r.status==='Pending');
       return `<div class="queue-row"><div style="display:flex;align-items:center;gap:9px;color:var(--forest);">${ICONS[it.icon]}<span style="color:var(--ink);font-weight:500;">${it.label}</span></div><button class="btn sm secondary" ${pending?'disabled':''} onclick="requestAccess('${it.key}');this.disabled=true;this.textContent='Requested';">${pending?'Requested':'Request'}</button></div>`;
     }).join('')}
   `, [{label:'Close', cls:'secondary', action:closeModal}]);
 }
+/* Administration pages are never granted through the request queue: the Admin/MD
+   assigns them directly in the access matrix. Everything else can be requested. */
+const ADMIN_ONLY_MODULES = ['access','departments','audit'];
+function isRequestable(key){ return !!key && key!=='*' && ALL_MODULE_KEYS.includes(key) && !ADMIN_ONLY_MODULES.includes(key); }
 function requestAccess(key){
+  if(!isRequestable(key)){ toast('That page is assigned directly by the Admin and cannot be requested.','err'); return; }
   const existing = DATA.accessRequests.find(r=>r.userId===CURRENT.id && r.moduleKey===key && r.status==='Pending');
   if(existing){ toast('You already have a pending request for this module.'); return; }
   DATA.accessRequests.push({id:uid('ar'), userId:CURRENT.id, userName:CURRENT.name, moduleKey:key, ts:Date.now(), status:'Pending'});
-  logActivity(`${CURRENT.name} requested access to "${key}".`);
+  logActivity(`${CURRENT.name} requested access to "${moduleLabel(key)}".`);
   saveData();
   toast('Access request sent to Admin/MD for approval.');
 }
@@ -1551,6 +1924,7 @@ const VIEW_TITLES = {
   leadsmap:['Leads Map','All captured leads plotted for transport and visit planning'],
   salesanalytics:['Sales Trends & History','Historical sales by crop, with export'],
   sowing:['Sowing Data Entry','Statutory sowing record - Seeds & Plant Varieties Act'],
+  seedinventory:['Seeds Inventory','Seed lots on hand, drawn down by sowing, with expiry and germination'],
   sownstatus:['Sown Seed Status','Track batches from sowing to transplant-ready'],
   seedlingstock:['Seedling Stock','Greenhouse inventory of ready seedlings'],
   livestock:['Livestock','Herd inventory, feed guidance and weight estimation'],
@@ -1589,7 +1963,7 @@ function nav(key, opts){
   const root = document.getElementById('view-root');
   const renderers = {
     dashboard:renderDashboard, cashsale:renderCashSale, leads:renderLeads, leadsmap:renderLeadsMap,
-    salesanalytics:renderSalesAnalytics, sowing:renderSowing,
+    salesanalytics:renderSalesAnalytics, sowing:renderSowing, seedinventory:renderSeedInventory,
     sownstatus:renderSownStatus, seedlingstock:renderSeedlingStock, livestock:renderLivestock, procurement:renderProcurement,
     consumables:renderConsumables, scouting:renderScouting, weather:renderWeatherView, acreage:renderAcreage, irrigation:renderIrrigation, farm:renderFarm, hr:renderHR,
     requisitions:renderRequisitions, reports:renderReports, departments:renderDepartments, access:renderAccess, audit:renderAudit,
@@ -1606,6 +1980,7 @@ function nav(key, opts){
     if(cur!==key){ try{ (cur? history.pushState : history.replaceState).call(history, {view:key}, '', '#'+key); }catch(e){} }
   }
   renderers[key](root);
+  if(!keepScroll) pullIfStale(30000); /* fresh data from colleagues on every module change */
 }
 window.addEventListener('popstate', e=>{
   const key = (e.state && e.state.view) || location.hash.replace('#','');
@@ -1861,7 +2236,7 @@ function kpi(label, value, sub, icon, subclass, display){
 <script>
 /* shared chart config */
 if(typeof Chart!=='undefined'){ Chart.defaults.font.family='Inter'; Chart.defaults.color='#68705F'; }
-const CROP_COLORS = {'Tomato':'#B94A42','Capsicum':'#B38A3C','Cucumber':'#6F9B62','Brassica':'#59452A'};
+const CROP_COLORS = {'Tomato':'#B94A42','Capsicum':'#B38A3C','Cucumber':'#6F9B62','Brassica':'#59452A','Other':'#7C8B74'};
 const WCODE_TEXT = code => code===0?'Clear sky':(code<=2?'Partly cloudy':(code===3?'Overcast':(code<=48?'Foggy':(code<=67?'Rain':(code<=77?'Snow':(code<=82?'Showers':'Thunderstorm'))))));
 
 /* ================= DASHBOARD - Bento ================= */
@@ -1887,7 +2262,7 @@ function renderDashboardApprovals(){
   }
   if(isAdminLike){
     DATA.accessRequests.filter(r=>r.status==='Pending').forEach(r=>
-      rows.push({label:'Access request', detail:`${r.userName} wants access to "${r.moduleKey}"`, action:`decideAccessRequest('${r.id}','Approved')`}));
+      rows.push({label:'Access request', detail:`${r.userName} wants access to "${moduleLabel(r.moduleKey)}"`, action:`decideAccessRequest('${r.id}','Approved')`}));
     DATA.users.filter(u=>u.status==='Pending').forEach(u=>
       rows.push({label:'New registration', detail:`${u.name} registered as ${u.role} (${u.designation})`, action:`approveRegistration('${u.id}')`}));
   }
@@ -1914,27 +2289,67 @@ function qaGo(view, modalFn){
   nav(view);
   if(modalFn) setTimeout(()=>{ const f=window[modalFn]; if(f) f(); }, 90);
 }
+function cmpVersion(a,b){ const pa=String(a||'0').replace(/^v/i,'').split('.').map(n=>parseInt(n,10)||0), pb=String(b||'0').replace(/^v/i,'').split('.').map(n=>parseInt(n,10)||0); for(let i=0;i<Math.max(pa.length,pb.length);i++){ const d=(pa[i]||0)-(pb[i]||0); if(d) return d>0?1:-1; } return 0; }
+/* Notifications: everything that needs this user's attention, only for modules and
+   roles that can act on it. Each item navigates to its module; items with `run`
+   open the exact record. The badge is refreshed on every save and navigation. */
 function alertItems(){
   const items=[];
   if(!CURRENT) return items;
   const can = k=>CURRENT.access.includes(k);
-  if(can('consumables')||can('procurement')) DATA.consumables.filter(c=>c.qty<=c.reorder).forEach(c=>items.push({sev:'rust', icon:ICONS.consum, view:can('consumables')?'consumables':'procurement', title:'Low stock: '+c.name, sub:c.qty+' '+c.unit+' on hand · reorder at '+c.reorder+' '+c.unit}));
+  const role = CURRENT.role, admin = canManage();
+  const push = o=>items.push(o);
+  /* sync and session state */
+  if(SERVER_MODE && SESSION_EXPIRED){
+    push({sev:'rust', icon:ICONS.access, title:'Session expired - sign in again to keep syncing', sub:'Your changes stay on this device until then', run:()=>logout()});
+  } else if(SERVER_MODE && OFFLINE){
+    const n = DATA? dirtyCollections().length + pendingPhotoCount() + pendingProfileCount() : 0;
+    push({sev:'amber', icon:ICONS.dashboard, title: n? `Offline · ${n} change${n===1?'':'s'} waiting to sync` : 'Working offline', sub:'Reconnects automatically · tap to retry now', run:()=>tryReconnect(true)});
+  }
+  /* SPN OS app update (phone only) */
+  if(SPN_CONFIG.mobile && RELEASES_CACHE && (RELEASES_CACHE.releases||[]).length){
+    const latest = RELEASES_CACHE.releases.find(r=>r.platform!=='ios');
+    if(latest && cmpVersion(latest.version, SPN_CONFIG.appVersion)>0) push({sev:'blue', icon:ICONS.dashboard, title:'SPN OS update available · v'+latest.version, sub:(latest.notes||'Download and install the new build')+' · you have v'+SPN_CONFIG.appVersion, run:()=>window.open(apiUrl('releases/'+latest.id+'/download'),'_blank')});
+  }
+  /* people & access (admins) */
+  if(admin){
+    const regs = DATA.users.filter(u=>u.status==='Pending').length;
+    if(regs) push({sev:'gold', icon:ICONS.access, view:'access', title:regs+' registration'+(regs===1?'':'s')+' awaiting approval', sub:'Users & Access · pending registrations'});
+    const ars = (DATA.accessRequests||[]).filter(r=>r.status==='Pending').length;
+    if(ars) push({sev:'gold', icon:ICONS.access, view:'access', title:ars+' access request'+(ars===1?'':'s')+' to decide', sub:'Users & Access · approvals queue'});
+  }
+  /* stock */
+  if(can('consumables')||can('procurement')) DATA.consumables.filter(c=>+c.qty<=+c.reorder).forEach(c=>push({sev:'rust', icon:ICONS.consum, view:can('consumables')?'consumables':'procurement', title:'Low stock: '+c.name, sub:c.qty+' '+c.unit+' on hand · reorder at '+c.reorder+' '+c.unit}));
+  if(can('seedinventory')) seedAttention().slice(0,6).forEach(({l,s})=>push({sev: s.key==='expired'?'rust':'gold', icon:ICONS.seed, view:'seedinventory', title:('Seed lot '+s.label.toLowerCase()+': '+l.crop+' '+(l.variety||'')).trim(), sub:(l.lotNo? 'Lot '+l.lotNo+' · ':'')+fmtLotQty(l)+(l.expiryDate? ' · expiry '+fmtDate(l.expiryDate):''), run:()=>{ nav('seedinventory'); openSeedLotDrawer(l.id); }}));
+  /* nursery */
+  if(can('seedlingstock')||can('sownstatus')||can('sowing')){
+    const ready = DATA.sowingRecords.filter(r=>computeStage(r).stage===4);
+    if(ready.length) push({sev:'blue', icon:ICONS.stock, view: can('seedlingstock')?'seedlingstock':(can('sownstatus')?'sownstatus':'sowing'), title:ready.length+' batch'+(ready.length===1?'':'es')+' ready for sale', sub: ready.slice(0,3).map(r=>r.batchCode).join(', ')+(ready.length>3?' and more':'')});
+  }
+  if(can('farm')){
+    (DATA.farmPlots||[]).filter(p=>p.status!=='Harvested').forEach(p=>{ const pr=plotProgress(p); if(pr && pr.due) push({sev:'gold', icon:ICONS.farm, view:'farm', title:'Harvest due: '+p.name, sub:p.crop+' · day '+pr.day+' of '+pr.total, run:()=>{ nav('farm'); openPlotDrawer(p.id); }}); });
+  }
+  /* sales & leads */
   if(can('leads')||can('leadsmap')){
     const leadView = can('leads')?'leads':'leadsmap';
-    scopedLeads().filter(l=>l.status!=='Closed'&&l.status!=='Lost'&&l.followUp&&l.followUp<todayISO()).forEach(l=>items.push({sev:'amber', icon:ICONS.leads, view:leadView, title:'Follow-up overdue: '+l.farmer, sub:l.location+' · was due '+fmtDate(l.followUp)}));
-    scopedLeads().filter(l=>l.status!=='Closed'&&l.status!=='Lost'&&l.followUp===todayISO()).forEach(l=>items.push({sev:'blue', icon:ICONS.map, view:leadView, title:'Visit due today: '+l.farmer, sub:l.interest||l.location}));
+    const openLead = l => can('leads') ? ()=>{ nav('leads'); openLeadDrawer(l.id); } : null;
+    scopedLeads().filter(l=>l.status!=='Closed'&&l.status!=='Lost'&&l.followUp&&l.followUp<todayISO()).forEach(l=>push({sev:'amber', icon:ICONS.leads, view:leadView, title:'Follow-up overdue: '+l.farmer, sub:l.location+' · was due '+fmtDate(l.followUp), run:openLead(l)}));
+    scopedLeads().filter(l=>l.status!=='Closed'&&l.status!=='Lost'&&l.followUp===todayISO()).forEach(l=>push({sev:'blue', icon:ICONS.map, view:leadView, title:'Visit due today: '+l.farmer, sub:l.interest||l.location, run:openLead(l)}));
   }
+  /* approvals: only the roles that can act on a stage are told about it */
   if(can('requisitions')){
-    const pendReq=DATA.requisitions.filter(r=>r.hodStatus==='Pending'||r.hrStatus==='Pending'||r.financeStatus==='Pending').length;
-    if(pendReq) items.push({sev:'gold', icon:ICONS.requisition, view:'requisitions', title:pendReq+' requisition(s) awaiting approval', sub:'Open Requisitions to review'});
+    const mine = DATA.requisitions.filter(r=> ((role==='HOD'||admin) && r.hodStatus==='Pending') || ((role==='HR'||admin) && r.hrStatus==='Pending') || ((role==='Finance'||admin) && r.financeStatus==='Pending')).length;
+    if(mine) push({sev:'gold', icon:ICONS.requisition, view:'requisitions', title:mine+' requisition'+(mine===1?'':'s')+' awaiting your approval', sub:'Open Requisitions to review'});
+    const own = DATA.requisitions.filter(r=>r.requester===CURRENT.name && r.hodStatus==='Approved' && r.hrStatus==='Approved' && r.financeStatus==='Approved' && !r.seenByRequester).length;
+    if(own && !admin) push({sev:'blue', icon:ICONS.requisition, view:'requisitions', title:own+' of your requisition'+(own===1?' is':'s are')+' fully approved', sub:'Open Requisitions for details'});
   }
   if(can('procurement')){
     const pendPR=DATA.procurement.filter(p=>p.status==='Pending Approval').length;
-    if(pendPR) items.push({sev:'gold', icon:ICONS.procure, view:'procurement', title:pendPR+' purchase request(s) pending', sub:'Procurement approval needed'});
+    if(pendPR) push({sev:'gold', icon:ICONS.procure, view:'procurement', title:pendPR+' purchase request'+(pendPR===1?'':'s')+' pending', sub:'Procurement approval needed'});
   }
-  if(['Admin','HR','HOD','SuperUser'].includes(CURRENT.role)){
+  if(['Admin','HR','HOD','SuperUser'].includes(role)){
     const pendScan=DATA.aiScans.filter(s=>s.status==='Pending Review').length;
-    if(pendScan) items.push({sev:'purple', icon:ICONS.scan, view:'dashboard', title:pendScan+' AI scan(s) awaiting review', sub:'MD / Admin / HR / HOD review'});
+    if(pendScan) push({sev:'purple', icon:ICONS.scan, view:'dashboard', title:pendScan+' AI scan'+(pendScan===1?'':'s')+' awaiting review', sub:'Review queue on the dashboard'});
   }
   return items;
 }
@@ -1968,13 +2383,15 @@ function closeBellPanel(){ const p=document.getElementById('bell-pop'); if(p) p.
 function openAlert(i){
   const a = (window.__bellItems||[])[i];
   closeBellPanel();
-  if(a && a.view && CURRENT.access.includes(a.view)) nav(a.view);
+  if(!a) return;
+  if(typeof a.run==='function'){ try{ a.run(); return; }catch(e){} }
+  if(a.view && CURRENT.access.includes(a.view)) nav(a.view);
   else nav(CURRENT.access.includes('dashboard')?'dashboard':CURRENT.access[0]);
 }
 document.addEventListener('click', (e)=>{ const p=document.getElementById('bell-pop'); if(p && !p.contains(e.target) && !(e.target.closest && e.target.closest('#tb-bell'))) closeBellPanel(); });
 const ALERT_TONES = {rust:['var(--danger-pale)','var(--danger)'], amber:['var(--warn-pale)','#8C5518'], blue:['var(--blue-pale)','#33597A'], gold:['var(--gold-pale)','#7A5D22'], purple:['var(--purple-pale)','#5A4B7E']};
 function renderDashboard(root){
-  const stockRows = DATA.sowingRecords.map(r=>({r, c:computeStage(r), viableQty:Math.round(r.qty*(r.germinationPct/100))}));
+  const stockRows = DATA.sowingRecords.map(r=>({r, c:computeStage(r), viableQty:batchRemaining(r)}));
   const readySeedlings = stockRows.filter(x=>x.c.stage===4).reduce((a,b)=>a+b.viableQty,0);
   const totalSeedlings = stockRows.reduce((a,b)=>a+b.viableQty,0);
   const todaySales = DATA.cashSales.filter(s=>s.date===todayISO()).reduce((a,b)=>a+b.total,0);
@@ -2068,7 +2485,7 @@ function renderDashboard(root){
     <div class="card b7">
       <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px;">
         <div class="card-title" style="margin:0;">Sales Performance · last 12 months</div>
-        <button class="btn sm ghost" onclick="nav('salesanalytics')">View sales analytics →</button>
+        ${CURRENT.access.includes('salesanalytics')? `<button class="btn sm ghost" onclick="nav('salesanalytics')">View sales analytics →</button>` : ''}
       </div>
       <canvas id="dash-sales-canvas" height="105" style="margin-top:10px;"></canvas>
     </div>
@@ -2125,6 +2542,7 @@ function renderDashboard(root){
         <button class="btn sm leaf" style="flex:none;" onclick="markScanReviewed('${s.id}')">Mark reviewed</button>
       </div>`).join('') : '<div class="small-muted">No AI scans awaiting review.</div>'}
     </div>` : ''}
+    ${seedAttentionCardHTML()}
     <div class="card flush ${isOversight?'b6':'b12'}">
       <div class="card-title" style="padding:16px 18px 0;">Consumables needing reorder</div>
       <div class="table-scroll" style="margin-top:8px;"><table><thead><tr><th>Item</th><th>On hand</th><th>Reorder level</th><th>Status</th></tr></thead><tbody>
@@ -2172,12 +2590,149 @@ async function fillDashboardWeather(){
   }
 }
 /* ---------------- topbar: notifications bell + global search ---------------- */
+/* =========================================================
+   POP-UP AND PHONE NOTIFICATIONS WITH USER-CHOSEN TONES
+   The bell list (alertItems) is the single source of truth. Whenever it gains an
+   item this device has not shown before, the user gets a pop-up card (in-app),
+   a tone and a vibration, and on the phone a notification-bar entry. Date-based
+   items (visits due, harvests due, seed lots expiring) are also scheduled as
+   phone reminders that fire even when the app is closed. Tones are synthesised
+   with WebAudio (no files, works offline); phone tones are bundled with the app.
+========================================================= */
+const NOTIF_TONES = {system:'Phone default sound', default:'SPN chime', bell:'Bell', drip:'Drip', soft:'Soft', alert:'Alert', none:'Silent'};
+const NOTIF_DEFAULTS = {tone:'default', vibrate:true, popups:true, system:true};
+function notifPrefs(){
+  let local = null; try{ local = JSON.parse(localStorage.getItem('spn_notif_prefs')||'null'); }catch(e){}
+  return Object.assign({}, NOTIF_DEFAULTS, local||{}, (CURRENT && CURRENT.prefs) || {});
+}
+let audioCtx = null;
+function playTone(name){
+  if(name==='none') return;
+  if(name==='system') name = 'default'; /* the phone plays its own sound; the browser has no access to it */
+  try{
+    audioCtx = audioCtx || new (window.AudioContext||window.webkitAudioContext)();
+    if(audioCtx.state==='suspended') audioCtx.resume();
+    const t0 = audioCtx.currentTime;
+    const note = (freq, start, dur, type, gain)=>{ const o=audioCtx.createOscillator(), g=audioCtx.createGain(); o.type=type||'sine'; o.frequency.value=freq; g.gain.setValueAtTime(0.0001, t0+start); g.gain.exponentialRampToValueAtTime(gain||0.25, t0+start+0.012); g.gain.exponentialRampToValueAtTime(0.0001, t0+start+dur); o.connect(g); g.connect(audioCtx.destination); o.start(t0+start); o.stop(t0+start+dur+0.05); };
+    switch(name){
+      case 'bell': note(880,0,0.9,'sine',0.3); note(1760,0,0.5,'sine',0.12); note(2640,0,0.3,'sine',0.05); break;
+      case 'drip': note(1200,0,0.12,'sine',0.3); note(800,0.1,0.16,'sine',0.2); break;
+      case 'soft': note(440,0,0.5,'sine',0.18); note(660,0.2,0.5,'sine',0.12); break;
+      case 'alert': note(1046,0,0.12,'square',0.1); note(1046,0.18,0.12,'square',0.1); note(1318,0.36,0.22,'square',0.1); break;
+      default: note(784,0,0.25,'sine',0.25); note(1175,0.18,0.45,'sine',0.22);
+    }
+  }catch(e){}
+}
+function vibratePattern(){ try{ if(navigator.vibrate) navigator.vibrate([80,40,80]); }catch(e){} }
+let SEEN_ALERTS = null;
+const alertKey = a => (a.title||'')+'|'+(a.sub||'');
+function notifyNewAlerts(items){
+  if(!CURRENT) return;
+  if(SEEN_ALERTS===null){
+    try{ SEEN_ALERTS = new Set(JSON.parse(localStorage.getItem('spn_alert_seen')||'[]')); }catch(e){ SEEN_ALERTS = new Set(); }
+    if(!SEEN_ALERTS.size){ /* first run on this device: what is there now is not "new" */
+      SEEN_ALERTS = new Set(items.map(alertKey)); try{ localStorage.setItem('spn_alert_seen', JSON.stringify([...SEEN_ALERTS])); }catch(e){} return;
+    }
+  }
+  const fresh = items.filter(a=>!SEEN_ALERTS.has(alertKey(a)));
+  SEEN_ALERTS = new Set(items.map(alertKey)); /* resolved items drop out, so they can alert again if they return */
+  try{ localStorage.setItem('spn_alert_seen', JSON.stringify([...SEEN_ALERTS])); }catch(e){}
+  if(!fresh.length) return;
+  const p = notifPrefs();
+  if(p.popups) fresh.slice(0,3).forEach(a=>showPopupNotification(a));
+  if(p.tone!=='none') playTone(p.tone);
+  if(p.vibrate) vibratePattern();
+  if(p.system && window.SPN_MOBILE && SPN_MOBILE.notify) fresh.slice(0,5).forEach(a=>{ try{ SPN_MOBILE.notify({title:a.title, body:a.sub||'', view:a.view||'dashboard', tone:p.tone}); }catch(e){} });
+}
+function showPopupNotification(a){
+  const wrap = document.getElementById('toast-wrap'); if(!wrap) return;
+  const tone = ALERT_TONES[a.sev] || ['var(--mint)','var(--forest)'];
+  const el = document.createElement('div');
+  el.className = 'toast notif-pop';
+  el.innerHTML = `<span class="alert-ico" style="background:${tone[0]};color:${tone[1]};">${a.icon||ICONS.dashboard}</span><span style="min-width:0;"><b>${esc(a.title)}</b><div style="opacity:.8;font-size:11.5px;margin-top:2px;">${esc(a.sub||'')}</div></span><button class="x-close" title="Dismiss">×</button>`;
+  el.querySelector('.x-close').onclick = ev=>{ ev.stopPropagation(); el.remove(); };
+  el.onclick = ()=>{ el.remove(); window.__bellItems = alertItems(); const i = window.__bellItems.findIndex(x=>alertKey(x)===alertKey(a)); if(i>=0) openAlert(i); };
+  wrap.appendChild(el);
+  setTimeout(()=>{ if(el.parentNode) el.remove(); }, 8000);
+}
+/* phone reminders for date-based items, re-scheduled whenever the data changes */
+function systemReminderList(){
+  const out=[]; if(!CURRENT) return out;
+  const can = k=>CURRENT.access.includes(k);
+  const at = (dateStr, h, m)=>{ const d = new Date(dateStr+'T00:00:00'); d.setHours(h, m, 0, 0); return d.getTime(); };
+  if(can('leads')||can('leadsmap')) scopedLeads().filter(l=>l.status!=='Closed'&&l.status!=='Lost'&&l.followUp&&l.followUp>=todayISO()).forEach(l=>out.push({key:'lead:'+l.id, at:at(l.followUp,7,30), title:'Visit due today: '+l.farmer, body:(l.location||'')+(l.interest? ' · '+l.interest:''), view: can('leads')?'leads':'leadsmap'}));
+  if(can('farm')) (DATA.farmPlots||[]).filter(p=>p.status!=='Harvested').forEach(p=>{ const pr=plotProgress(p); if(pr && pr.harvestDate && pr.harvestDate>=todayISO()) out.push({key:'harvest:'+p.id, at:at(pr.harvestDate,7,30), title:'Harvest due: '+p.name, body:p.crop+' · expected harvest today', view:'farm'}); });
+  if(can('seedinventory')) (DATA.seedInventory||[]).filter(l=>l.expiryDate && (+l.qty||0)>0).forEach(l=>{
+    const warn = addDaysTo(l.expiryDate, -7);
+    if(warn>=todayISO()) out.push({key:'seedwarn:'+l.id, at:at(warn,7,30), title:'Seed lot expires in 7 days: '+l.crop+' '+(l.variety||''), body:'Lot '+(l.lotNo||'-')+' · '+fmtLotQty(l), view:'seedinventory'});
+    if(l.expiryDate>=todayISO()) out.push({key:'seedexp:'+l.id, at:at(l.expiryDate,7,30), title:'Seed lot expires today: '+l.crop+' '+(l.variety||''), body:'Lot '+(l.lotNo||'-'), view:'seedinventory'});
+  });
+  const now = Date.now();
+  return out.filter(r=>r.at>now).sort((a,b)=>a.at-b.at).slice(0,60);
+}
+let reminderTimer = null, lastReminderSig = '';
+function scheduleSystemReminders(){
+  if(!(window.SPN_MOBILE && SPN_MOBILE.scheduleReminders) || !CURRENT) return;
+  clearTimeout(reminderTimer);
+  reminderTimer = setTimeout(()=>{
+    const p = notifPrefs();
+    const list = p.system ? systemReminderList() : [];
+    const sig = JSON.stringify([p.tone, list.map(r=>r.key+'@'+r.at)]);
+    if(sig===lastReminderSig) return; /* nothing changed: leave the schedule alone */
+    lastReminderSig = sig;
+    try{ SPN_MOBILE.scheduleReminders(list, p.tone); }catch(e){}
+  }, 4000);
+}
+/* profile page card */
+function renderNotifPrefsCard(){
+  const p = notifPrefs();
+  return `<div class="card" style="max-width:440px;margin-top:18px;">
+    <div class="card-title">Notifications</div>
+    <div class="form-grid">
+      <div class="field"><label>Tone</label><div style="display:flex;gap:8px;"><select id="np-tone">${Object.entries(NOTIF_TONES).map(([k,v])=>`<option value="${k}" ${p.tone===k?'selected':''}>${v}</option>`).join('')}</select><button type="button" class="btn sm secondary" onclick="playTone(document.getElementById('np-tone').value)">Preview</button></div>
+        <small>"Phone default sound" uses the sound your phone already uses for notifications${SPN_CONFIG.mobile? '; any other phone sound or ringtone can be chosen per tone channel in the phone settings below' : ' (in the browser the preview plays the SPN chime instead)'}.</small>
+        ${SPN_CONFIG.mobile? `<div style="margin-top:8px;"><button type="button" class="btn sm secondary" onclick="openPhoneNotifSettings()">Choose any phone sound…</button></div>` : ''}</div>
+      <div class="field"><label>&nbsp;</label><label class="checkline" style="margin-top:8px;"><input type="checkbox" id="np-vibrate" ${p.vibrate?'checked':''}> Vibrate</label></div>
+      <div class="field field-full"><label class="checkline"><input type="checkbox" id="np-popups" ${p.popups?'checked':''}> Pop-up cards in the app when something new needs attention</label></div>
+      <div class="field field-full"><label class="checkline"><input type="checkbox" id="np-system" ${p.system?'checked':''}> Phone notifications (notification bar): new items, plus reminders for visits due, harvests due and seed lots expiring</label>
+        ${SPN_CONFIG.mobile? `<div style="margin-top:6px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;"><button type="button" class="btn sm secondary" onclick="requestSystemNotifications()">Allow notifications on this phone</button><span class="small-muted" id="np-perm"></span></div>` : `<small>Phone notifications apply to the SPN OS app; in the browser you get the pop-ups and tone.</small>`}
+      </div>
+    </div>
+    <div style="margin-top:10px;"><button class="btn sm leaf" onclick="saveNotifPrefs()">Save notification settings</button></div>
+  </div>`;
+}
+function saveNotifPrefs(){
+  const prefs = {tone:document.getElementById('np-tone').value, vibrate:document.getElementById('np-vibrate').checked, popups:document.getElementById('np-popups').checked, system:document.getElementById('np-system').checked};
+  CURRENT.prefs = prefs; const u = DATA.users.find(x=>x.id===CURRENT.id); if(u) u.prefs = prefs;
+  try{ localStorage.setItem('spn_notif_prefs', JSON.stringify(prefs)); }catch(e){}
+  saveData();
+  pushProfile({name:CURRENT.name, phone:CURRENT.phone||'', email:CURRENT.email||'', avatar:CURRENT.avatar||null, prefs});
+  lastReminderSig = ''; scheduleSystemReminders();
+  toast('Notification settings saved.');
+}
+/* Android lets the user pick any system sound or ringtone per notification channel,
+   but only from its own settings screen: open SPN OS's notification settings */
+async function openPhoneNotifSettings(){
+  if(!(window.SPN_MOBILE && SPN_MOBILE.openNotificationSettings)){ toast('Available in the SPN OS app: open the phone settings → Apps → SPN OS → Notifications.','err'); return; }
+  const ok = await SPN_MOBILE.openNotificationSettings();
+  if(!ok) toast('Could not open the phone settings: go to Settings → Apps → SPN OS → Notifications and pick a sound per channel.','err');
+}
+async function requestSystemNotifications(){
+  if(!(window.SPN_MOBILE && SPN_MOBILE.requestNotifPermission)){ toast('Phone notifications are available in the SPN OS app.','err'); return; }
+  const r = await SPN_MOBILE.requestNotifPermission();
+  const el = document.getElementById('np-perm'); if(el) el.textContent = r==='granted'? 'Allowed on this phone' : 'Not allowed - enable SPN OS notifications in the phone settings';
+  if(r==='granted'){ lastReminderSig=''; scheduleSystemReminders(); }
+}
+
 function updateBell(){
   const badge = document.getElementById('bell-badge');
   if(!badge || !CURRENT){ if(badge) badge.style.display='none'; return; }
-  const n = alertItems().length;
+  const items = alertItems();
+  const n = items.length;
   badge.textContent = n;
   badge.style.display = n? 'flex':'none';
+  try{ notifyNewAlerts(items); }catch(e){}
+  try{ scheduleSystemReminders(); }catch(e){}
 }
 function closeSearchPop(){ const p=document.getElementById('search-pop'); if(p) p.remove(); }
 let searchResultRuns = [];
@@ -2319,7 +2874,7 @@ function openSaleDrawer(id){
       ['Served by', esc(s.servedBy)],
       ['Location', esc(s.location||'')||'-'],
       ['Agronomist follow-up', s.assignedAgronomist? st('gold', s.assignedAgronomist) : '-'],
-      ['Customer GPS', s.customerLat!=null? `<a class="map-link" target="_blank" href="https://www.google.com/maps?q=${s.customerLat},${s.customerLng}">📍 ${s.customerLat.toFixed(4)}, ${s.customerLng.toFixed(4)}</a>` : 'Not captured'],
+      ['Customer GPS', s.customerLat!=null? `<a class="map-link" target="_blank" href="${mapsUrl(s.customerLat,s.customerLng)}">📍 ${s.customerLat.toFixed(4)}, ${s.customerLng.toFixed(4)}</a>` : 'Not captured'],
     ])}
   `, [
     {label:'⬇ Download receipt (PDF)', cls:'leaf', action:()=>downloadReceiptPDF(s.id)},
@@ -2422,9 +2977,27 @@ function exportCashSalesPDF(){
   doc.save(`SPN_Cash_Sales_${Date.now()}.pdf`);
   logActivity('Exported the cash sales register to PDF.');
 }
-function openSaleModal(){
-  const nextNo = 'SPN-R-'+(1044+DATA.cashSales.length-2);
-  const readyLines = DATA.sowingRecords.filter(r=>computeStage(r).stage===4);
+/* Seedling batches: viable = sown qty x germination; sales that reference a batch
+   draw it down, and a batch can be closed (sold out / transplanted). Every reader
+   (dashboard, pipeline, Seedling Stock, POS list, reports) uses batchRemaining(). */
+function batchViable(r){ return Math.round((+r.qty||0)*((+r.germinationPct||0)/100)); }
+function soldFromBatch(r){ return DATA.cashSales.filter(s=>s.batchId===r.id).reduce((a,s)=>a+(+s.qty||0),0); }
+function batchRemaining(r){ if(r.closed) return 0; return Math.max(0, batchViable(r) - soldFromBatch(r)); }
+function readyBatches(){ return DATA.sowingRecords.filter(r=>computeStage(r).stage===4 && batchRemaining(r)>0); }
+function nextReceiptNo(){ const nums = DATA.cashSales.map(s=>parseInt(String(s.receiptNo||'').replace(/\D/g,''),10)).filter(n=>!isNaN(n)); return 'SPN-R-'+((nums.length? Math.max(...nums) : 1041)+1); }
+function onSaleBatchChange(id){
+  const r = id ? DATA.sowingRecords.find(x=>x.id===id) : null;
+  const crop = document.getElementById('f-crop'), qty = document.getElementById('f-qty'), hint = document.getElementById('f-batch-hint');
+  if(!r){ if(qty) qty.removeAttribute('max'); if(hint) hint.textContent='Not from a nursery batch: type the crop/variety sold.'; return; }
+  const left = batchRemaining(r);
+  if(crop) crop.value = r.crop+' '+r.variety;
+  if(qty){ qty.max = left; if(+qty.value>left) qty.value = left; }
+  if(hint) hint.textContent = `${left.toLocaleString()} seedlings left in ${r.batchCode} (${r.bay||'nursery'})`;
+}
+function openSaleModal(batchId){
+  const nextNo = nextReceiptNo();
+  const readyLines = readyBatches();
+  const preset = batchId && readyLines.find(r=>r.id===batchId) ? batchId : (readyLines[0]? readyLines[0].id : '');
   openModal('New Cash Sale', `
     <div class="form-grid">
       <div class="field"><label>Receipt No</label><input class="mono" id="f-receipt" value="${nextNo}" readonly></div>
@@ -2436,11 +3009,16 @@ function openSaleModal(){
       <div class="field field-full"><label>Customer Location <span class="small-muted">(type it, or use GPS below)</span></label><input id="f-location" placeholder="e.g. Mogotio Town, near..."></div>
       <div class="field"><label>Customer GPS <span class="small-muted">(optional - for follow-up route planning)</span></label><input id="f-gps" readonly placeholder="Tap 'Capture location'"></div>
       <div class="field" style="justify-content:flex-end;"><button type="button" class="btn secondary sm" onclick="captureCashSaleGPS()">📍 Capture GPS</button></div>
+      <div class="field field-full"><label>Nursery batch <span class="small-muted">(draws the seedlings from stock)</span></label>
+        <select id="f-batch" onchange="onSaleBatchChange(this.value)">
+          <option value="">- Not from a batch (other produce) -</option>
+          ${readyLines.map(r=>`<option value="${r.id}" ${r.id===preset?'selected':''}>${esc(r.crop+' '+r.variety)} · ${esc(r.batchCode)} · ${batchRemaining(r).toLocaleString()} left</option>`).join('')}
+        </select>
+        <small id="f-batch-hint">${preset? '' : 'No ready batches in stock right now: type the crop/variety sold.'}</small></div>
       <div class="field field-full"><label>Crop / Variety <span class="req">*</span></label>
-        <input id="f-crop" list="cashsale-crop-list" placeholder="Type or pick from inventory" value="${readyLines.length?esc(readyLines[0].crop+' '+readyLines[0].variety):''}">
-        <datalist id="cashsale-crop-list">${readyLines.map(s=>`<option value="${esc(s.crop+' '+s.variety)}">`).join('')}</datalist>
-        <small>Select a ready batch from the list, or type any crop/variety sold.</small></div>
-      <div class="field"><label>Quantity <span class="req">*</span></label><input type="number" id="f-qty" value="100" min="1"></div>
+        <input id="f-crop" list="cashsale-crop-list" placeholder="Type or pick from inventory" value="${preset? esc(readyLines.find(r=>r.id===preset).crop+' '+readyLines.find(r=>r.id===preset).variety) : ''}">
+        <datalist id="cashsale-crop-list">${readyLines.map(s=>`<option value="${esc(s.crop+' '+s.variety)}">`).join('')}</datalist></div>
+      <div class="field"><label>Quantity <span class="req">*</span></label><input type="number" id="f-qty" value="100" min="1" ${preset? 'max="'+batchRemaining(readyLines.find(r=>r.id===preset))+'"' : ''}></div>
       <div class="field"><label>Unit Price (KES)</label><input type="number" id="f-price" value="6" min="0"></div>
       <div class="field"><label>VAT Treatment</label><select id="f-vat"><option>Exempt - agricultural produce</option><option>Zero-rated</option><option>Standard 16%</option></select></div>
       <div class="field"><label>Assign Agronomist for follow-up <span class="small-muted">(optional)</span></label><select id="f-agronomist"><option value="">- None -</option>${DATA.users.filter(u=>u.role==='Agronomist').map(u=>`<option>${esc(u.name)}</option>`).join('')}</select></div>
@@ -2453,12 +3031,18 @@ function openSaleModal(){
       const price=+document.getElementById('f-price').value;
       const crop=document.getElementById('f-crop').value.trim();
       if(!cust||!qty||!crop){toast('Customer name, crop/variety and quantity are required.','err');return;}
+      const batchSel = document.getElementById('f-batch');
+      const batch = (batchSel && batchSel.value) ? DATA.sowingRecords.find(r=>r.id===batchSel.value) : null;
+      if(batch && qty > batchRemaining(batch)){ toast(`Only ${batchRemaining(batch).toLocaleString()} seedlings left in batch ${batch.batchCode}.`,'err'); return; }
       const gpsVal = document.getElementById('f-gps').value.split(',').map(s=>parseFloat(s));
       const hasGps = gpsVal.length===2 && !isNaN(gpsVal[0]) && !isNaN(gpsVal[1]);
       const newSaleId = uid('cs');
+      const vatTreatment = document.getElementById('f-vat').value;
+      const vatAmount = vatTreatment==='Standard 16%' ? Math.round((qty*price) - (qty*price)/1.16) : 0; /* prices are VAT-inclusive at the POS */
       DATA.cashSales.push({id:newSaleId, receiptNo:document.getElementById('f-receipt').value, date:document.getElementById('f-date').value || todayISO(),
         customer:cust, phone:document.getElementById('f-phone').value, kraPin:document.getElementById('f-pin').value,
-        location:document.getElementById('f-location').value||'', crop, qty, unitPrice:price, total:qty*price,
+        location:document.getElementById('f-location').value||'', crop, qty, unitPrice:price, total:qty*price, vatAmount,
+        batchId: batch? batch.id : null, batchCode: batch? batch.batchCode : null,
         vat:document.getElementById('f-vat').value, payment:document.getElementById('f-pay').value, servedBy:CURRENT.name,
         assignedAgronomist:document.getElementById('f-agronomist').value||null,
         customerLat: hasGps?gpsVal[0]:null, customerLng: hasGps?gpsVal[1]:null});
@@ -2525,7 +3109,7 @@ function renderLeads(root){
       {key:'followUp', label:'Follow-up', val:r=>r.followUp||'', html:r=>fmtDate(r.followUp)},
       {key:'status', label:'Status', val:r=>r.status, html:r=>statusBadge(r.status)},
       {key:'captured', label:'Captured', val:r=>r.capturedAt||0, html:r=>`<span class="small-muted">${r.capturedAt?fmtDT(r.capturedAt):'-'}</span>`},
-      {key:'gps', label:'GPS', val:r=>'', sortable:false, html:r=>`<a class="map-link" target="_blank" onclick="event.stopPropagation()" href="https://www.google.com/maps?q=${r.lat},${r.lng}">📍 ${r.lat.toFixed(3)}, ${r.lng.toFixed(3)}</a>`},
+      {key:'gps', label:'GPS', val:r=>'', sortable:false, html:r=>`<a class="map-link" target="_blank" onclick="event.stopPropagation()" href="${mapsUrl(r.lat,r.lng)}">📍 ${r.lat.toFixed(3)}, ${r.lng.toFixed(3)}</a>`},
     ],
     rowMenu: r=>[
       {label:'Open details', run:()=>openLeadDrawer(r.id)},
@@ -2553,7 +3137,7 @@ function openLeadDrawer(id){
       ['Status', statusBadge(l.status)],
       ['Phone', esc(l.phone)||'-'],
       ['Location', esc(l.location)],
-      ['GPS', `<a class="map-link" target="_blank" href="https://www.google.com/maps?q=${l.lat},${l.lng}">📍 ${l.lat.toFixed(4)}, ${l.lng.toFixed(4)}</a>${l.altitude!=null?` <span class="small-muted">· alt ~${l.altitude}m</span>`:''}`],
+      ['GPS', `<a class="map-link" target="_blank" href="${mapsUrl(l.lat,l.lng)}">📍 ${l.lat.toFixed(4)}, ${l.lng.toFixed(4)}</a>${l.altitude!=null?` <span class="small-muted">· alt ~${l.altitude}m</span>`:''}`],
       ['Interest / Order', esc(l.interest)||'-'],
       ['Captured by', esc(l.capturedBy||'-')],
       ['Assigned to', esc(l.assigned)],
@@ -2720,7 +3304,7 @@ function renderLeadsMapTable(){
     <th></th>
   </tr>
   </thead><tbody>
-  ${filtered.map(l=>`<tr><td><input type="checkbox" ${routeSelection.has(l.id)?'checked':''} onchange="toggleRouteSelect('${l.id}',this.checked)"></td><td class="cell-main">${esc(l.farmer)}</td><td>${st(l.kind==='Lead'?'slate':'gold', l.kind)}</td><td>${esc(l.location)}</td><td>${esc(l.assigned)}</td><td>${statusBadge(l.status)}</td><td><a class="map-link" target="_blank" href="https://www.google.com/maps?q=${l.lat},${l.lng}">📍 View</a></td></tr>`).join('') || `<tr><td colspan="7" class="small-muted" style="padding:14px;">No leads match this filter.</td></tr>`}
+  ${filtered.map(l=>`<tr><td><input type="checkbox" ${routeSelection.has(l.id)?'checked':''} onchange="toggleRouteSelect('${l.id}',this.checked)"></td><td class="cell-main">${esc(l.farmer)}</td><td>${st(l.kind==='Lead'?'slate':'gold', l.kind)}</td><td>${esc(l.location)}</td><td>${esc(l.assigned)}</td><td>${statusBadge(l.status)}</td><td><a class="map-link" target="_blank" href="${mapsUrl(l.lat,l.lng)}">📍 View</a></td></tr>`).join('') || `<tr><td colspan="7" class="small-muted" style="padding:14px;">No leads match this filter.</td></tr>`}
   </tbody></table></div></div>
   <div class="disclaimer">Routes always start from Savannah Propagation Nursery, Mogotio.</div>
   `;
@@ -2764,9 +3348,9 @@ In under 150 words, plain text: suggest sensible rest points along the way (for 
 
 <script>
 /* ================= SALES TRENDS & HISTORY ================= */
-const SALES_CROPS = ['Tomato','Capsicum','Cucumber','Brassica'];
+const SALES_CROPS = ['Tomato','Capsicum','Cucumber','Brassica','Other'];
 let salesChartInstance = null;
-let salesSelectedCrops = ['Tomato','Capsicum','Cucumber','Brassica'];
+let salesSelectedCrops = ['Tomato','Capsicum','Cucumber','Brassica','Other'];
 function renderSalesAnalytics(root){
   const thisYear = new Date().getFullYear();
   root.innerHTML = `
@@ -3027,7 +3611,8 @@ function toggleSalesCrop(crop, checked){
   updateSalesChart();
 }
 function matchSalesCrop(line){
-  return SALES_CROPS.find(c => (line||'').toLowerCase().includes(c.toLowerCase())) || null;
+  /* sales of crops outside the four tracked lines are charted as "Other" instead of vanishing */
+  return SALES_CROPS.find(c => c!=='Other' && (line||'').toLowerCase().includes(c.toLowerCase())) || 'Other';
 }
 function realSalesByMonth(){
   const map = {};
@@ -3142,7 +3727,7 @@ function openBatchDrawer(id){
   const r = DATA.sowingRecords.find(x=>x.id===id);
   if(!r) return;
   const c = computeStage(r);
-  const viableQty = Math.round(r.qty*(r.germinationPct/100));
+  const viableQty = batchViable(r), soldQty = soldFromBatch(r), remainingQty = batchRemaining(r);
   openDrawer(`<span class="mono" style="font-size:15px;">${esc(r.batchCode)}</span>`, esc(r.crop)+' · '+esc(r.variety)+' · '+esc(r.bay), `
     <div style="margin-bottom:16px;">${growthStepperHTML(c.stage)}</div>
     <div class="progress-line" style="margin-bottom:6px;"><i style="width:${c.pct}%;"></i></div>
@@ -3151,6 +3736,7 @@ function openBatchDrawer(id){
       ['Status', stockStatusBadge(STAGES[c.stage-1])],
       ['Quantity sown', `<span class="mono">${r.qty.toLocaleString()}</span>`],
       ['Est. viable', `<b class="mono">${viableQty.toLocaleString()}</b> at ${r.germinationPct}% germination`],
+      ['Sold / remaining', `<span class="mono">${soldQty.toLocaleString()}</span> sold · <b class="mono">${remainingQty.toLocaleString()}</b> remaining${r.closed? ' · '+st('slate','Closed') : ''}`],
       ['Date sown', fmtDate(r.dateSown)],
       ['Est. ready date', fmtDate(c.readyDate)+` (${r.readyDays}-day cycle)`],
       ['Bay', esc(r.bay)],
@@ -3168,10 +3754,215 @@ function openBatchDrawer(id){
     {label:'Close', cls:'secondary', action:closeDrawer},
   ].filter(Boolean));
 }
+/* =========================================================
+   SEEDS INVENTORY - seed lots received, on hand, sown and expiring.
+   Each lot: crop, variety, supplier, lot no., KEPHIS cert, class, quantity (seeds,
+   g or kg), germination %, received / expiry dates, cost, store location and a
+   movement log. Sowing picks a lot and draws the quantity down automatically.
+========================================================= */
+const SEED_UNITS = ['seeds','g','kg'];
+const SEED_EXPIRY_WARN_DAYS = 60;
+function fmtLotQty(l){ const q = +l.qty||0; return (l.unit==='seeds'? Math.round(q).toLocaleString() : (+q.toFixed(2)).toLocaleString())+' '+(l.unit||'seeds'); }
+function seedLotStatus(l){
+  const today = todayISO();
+  const q = +l.qty||0, init = +l.initialQty||0;
+  if(l.expiryDate && l.expiryDate < today) return {key:'expired', label:'Expired', color:'rust'};
+  if(q<=0) return {key:'empty', label:'Used up', color:'slate'};
+  if(l.expiryDate && l.expiryDate <= addDays(SEED_EXPIRY_WARN_DAYS)) return {key:'expiring', label:'Expiring soon', color:'gold'};
+  if(init>0 && q <= init*0.15) return {key:'low', label:'Running low', color:'gold'};
+  return {key:'ok', label:'In stock', color:'green'};
+}
+function seedLotsAvailable(){ return (DATA.seedInventory||[]).filter(l=> (+l.qty||0)>0 && !(l.expiryDate && l.expiryDate < todayISO())); }
+function lotLabel(l){ return `${l.lotNo||'(no lot no.)'} · ${l.crop}${l.variety? ' '+l.variety:''} · ${fmtLotQty(l)} left`; }
+/* lots that need a decision: expired, expiring, running low, used up */
+function seedAttention(){ return (DATA.seedInventory||[]).map(l=>({l, s:seedLotStatus(l)})).filter(x=>x.s.key!=='ok'); }
+function seedTotals(){
+  const lots = DATA.seedInventory||[];
+  const seeds = lots.filter(l=>l.unit==='seeds').reduce((a,l)=>a+(+l.qty||0),0);
+  const grams = lots.reduce((a,l)=> a + (l.unit==='g'? (+l.qty||0) : l.unit==='kg'? (+l.qty||0)*1000 : 0), 0);
+  return {lots:lots.length, seeds, grams, attention: seedAttention().length};
+}
+function renderSeedInventory(root){
+  DATA.seedInventory = DATA.seedInventory || [];
+  const t = seedTotals();
+  const attn = seedAttention();
+  root.innerHTML = `
+  <div class="view-header"><div><h2>Seeds Inventory</h2><p>Seed lots on hand with supplier, lot and certificate numbers, germination, expiry and the quantity drawn down by sowing. Pick a lot when recording a sowing and the stock updates itself.</p></div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;">
+    <button class="btn secondary" onclick="exportSeedInventoryExcel()">⬇ Excel</button>
+    <button class="btn" onclick="openSeedLotModal()">+ Receive seed lot</button>
+  </div></div>
+  <div class="grid cols-4" style="margin-bottom:18px;">
+    ${kpi('Seed lots', t.lots, `${seedLotsAvailable().length} available for sowing`, 'seed')}
+    ${kpi('Seeds on hand', t.seeds.toLocaleString(), 'counted lots (seeds)', 'stock')}
+    ${kpi('Seed by weight', t.grams>=1000? (t.grams/1000).toFixed(2)+' kg' : Math.round(t.grams)+' g', 'weighed lots', 'consum')}
+    ${kpi('Needs attention', t.attention, t.attention? attn.slice(0,3).map(x=>x.l.lotNo||x.l.crop).join(', ') : 'No expired, expiring or low lots', 'status', t.attention? 'warn':'')}
+  </div>
+  ${dataTable('seedlots', {
+    searchLabel:'seed lots',
+    sortKey:'receivedDate', sortDir:-1,
+    rows: DATA.seedInventory.slice(),
+    onRowClick:'openSeedLotDrawer',
+    emptyTitle:'No seed lots yet', emptyText:'Receive your first seed lot with the button above; sowing can then draw from it.',
+    columns:[
+      {key:'lotNo', label:'Lot No.', val:l=>l.lotNo||'', html:l=>`<span class="mono">${esc(l.lotNo||'-')}</span>`},
+      {key:'crop', label:'Crop / Variety', val:l=>l.crop+' '+(l.variety||''), html:l=>`<div class="cell-main">${esc(l.crop)}</div><div class="cell-sub">${esc(l.variety||'')}</div>`},
+      {key:'supplier', label:'Supplier', val:l=>l.supplier||''},
+      {key:'seedClass', label:'Class', val:l=>l.seedClass||'', html:l=>l.seedClass? st('gold', l.seedClass):'-'},
+      {key:'certNo', label:'KEPHIS Cert.', val:l=>l.certNo||'', html:l=>`<span class="mono" style="font-size:11px;">${esc(l.certNo||'-')}</span>`},
+      {key:'qty', label:'On hand', align:'right', val:l=>+l.qty||0, html:l=>`<span class="mono">${fmtLotQty(l)}</span>${(+l.initialQty||0)>0? `<div class="cell-sub">of ${(+l.initialQty).toLocaleString()}</div>`:''}`},
+      {key:'germ', label:'Germ. %', align:'right', val:l=>+l.germinationPct||0, html:l=>`<span class="mono">${l.germinationPct!=null && l.germinationPct!==''? l.germinationPct+'%':'-'}</span>`},
+      {key:'receivedDate', label:'Received', val:l=>l.receivedDate||'', html:l=>fmtDate(l.receivedDate)},
+      {key:'expiryDate', label:'Expiry', val:l=>l.expiryDate||'', html:l=>l.expiryDate? fmtDate(l.expiryDate) : '-'},
+      {key:'location', label:'Store', val:l=>l.location||''},
+      {key:'status', label:'Status', val:l=>seedLotStatus(l).label, html:l=>{ const s=seedLotStatus(l); return st(s.color, s.label); }},
+    ],
+  })}`;
+}
+function openSeedLotModal(editId){
+  const rec = editId ? (DATA.seedInventory||[]).find(l=>l.id===editId) : null;
+  openModal(rec? 'Edit seed lot' : 'Receive seed lot', `
+    <div class="form-grid">
+      <div class="field"><label>Crop <span class="req">*</span></label><input id="sl-crop" list="crop-list-sl" value="${rec?esc(rec.crop):''}" placeholder="Type or pick"><datalist id="crop-list-sl">${COMMON_CROPS.map(c=>`<option value="${c}">`).join('')}</datalist></div>
+      <div class="field"><label>Variety <span class="req">*</span></label><input id="sl-variety" value="${rec?esc(rec.variety||''):''}" placeholder="e.g. Zara F1"></div>
+      <div class="field"><label>Seed lot no.</label><input class="mono" id="sl-lot" value="${rec?esc(rec.lotNo||''):''}" placeholder="e.g. ZF1-2507-K"></div>
+      <div class="field"><label>Supplier / source</label><input id="sl-supplier" value="${rec?esc(rec.supplier||''):''}" placeholder="e.g. Kenya Seed Co."></div>
+      <div class="field"><label>KEPHIS certificate no.</label><input class="mono" id="sl-cert" value="${rec?esc(rec.certNo||''):''}" placeholder="KEPHIS/..."></div>
+      <div class="field"><label>Seed class</label><select id="sl-class">${['F1','OPV','Tree','Fruit'].map(c=>`<option ${rec&&rec.seedClass===c?'selected':''}>${c}</option>`).join('')}</select></div>
+      <div class="field"><label>${rec? 'Quantity on hand' : 'Quantity received'} <span class="req">*</span></label><input type="number" id="sl-qty" min="0" step="any" value="${rec? (+rec.qty||0) : ''}"></div>
+      <div class="field"><label>Unit</label><select id="sl-unit">${SEED_UNITS.map(u=>`<option ${rec&&rec.unit===u?'selected':''}>${u}</option>`).join('')}</select></div>
+      <div class="field"><label>Germination %</label><input type="number" id="sl-germ" min="0" max="100" value="${rec&&rec.germinationPct!=null? rec.germinationPct : ''}" placeholder="from the label or a test"></div>
+      <div class="field"><label>Cost (KES, whole lot)</label><input type="number" id="sl-cost" min="0" value="${rec? (+rec.cost||''):''}"></div>
+      <div class="field"><label>Date received</label><input type="date" id="sl-received" value="${rec? (rec.receivedDate||''):todayISO()}"></div>
+      <div class="field"><label>Expiry / use-by date</label><input type="date" id="sl-expiry" value="${rec? (rec.expiryDate||''):''}"></div>
+      <div class="field"><label>Store location</label><input id="sl-location" value="${rec?esc(rec.location||''):''}" placeholder="e.g. Seed store, shelf B"></div>
+      <div class="field field-full"><label>Notes</label><input id="sl-notes" value="${rec?esc(rec.notes||''):''}" placeholder="e.g. treated seed, keep cool and dry"></div>
+    </div>
+  `, [
+    {label:'Cancel', cls:'secondary', action:closeModal},
+    {label: rec? 'Save changes' : 'Add to inventory', cls:'leaf', action:()=>{
+      const crop = document.getElementById('sl-crop').value.trim(), variety = document.getElementById('sl-variety').value.trim();
+      const qty = +document.getElementById('sl-qty').value;
+      if(!crop || !variety){ toast('Crop and variety are required.','err'); return; }
+      if(!(qty>=0) || (!rec && qty<=0)){ toast('Enter the quantity received.','err'); return; }
+      const payload = { crop, variety, lotNo:document.getElementById('sl-lot').value.trim(), supplier:document.getElementById('sl-supplier').value.trim(),
+        certNo:document.getElementById('sl-cert').value.trim(), seedClass:document.getElementById('sl-class').value, unit:document.getElementById('sl-unit').value,
+        germinationPct: document.getElementById('sl-germ').value==='' ? null : +document.getElementById('sl-germ').value,
+        cost:+document.getElementById('sl-cost').value||0, receivedDate:document.getElementById('sl-received').value || todayISO(),
+        expiryDate:document.getElementById('sl-expiry').value || '', location:document.getElementById('sl-location').value.trim(), notes:document.getElementById('sl-notes').value.trim() };
+      DATA.seedInventory = DATA.seedInventory || [];
+      if(rec){
+        const before = +rec.qty||0;
+        Object.assign(rec, payload, {qty});
+        if(qty!==before){ rec.movements = rec.movements||[]; rec.movements.unshift({ts:Date.now(), type:'adjust', qty: qty-before, note:'Edited on-hand quantity', by:CURRENT.name}); }
+        logActivity(`Updated seed lot ${rec.lotNo||rec.crop} (${crop} ${variety}).`);
+      } else {
+        DATA.seedInventory.push(Object.assign({id:uid('sl'), qty, initialQty:qty, movements:[{ts:Date.now(), type:'received', qty, note:'Lot received', by:CURRENT.name}]}, payload));
+        logActivity(`Received seed lot ${payload.lotNo||'(no lot no.)'}: ${crop} ${variety}, ${qty} ${payload.unit}.`);
+      }
+      saveData(); closeModal();
+      if(document.getElementById('view-root').dataset.view==='seedinventory') renderSeedInventory(document.getElementById('view-root'));
+      toast(rec? 'Seed lot updated.' : 'Seed lot added to inventory.');
+    }}
+  ]);
+}
+function openSeedLotDrawer(id){
+  const l = (DATA.seedInventory||[]).find(x=>x.id===id); if(!l) return;
+  const s = seedLotStatus(l);
+  const sownBatches = (DATA.sowingRecords||[]).filter(r=>r.seedLotId===l.id);
+  const used = (l.movements||[]).filter(m=>m.type==='sown').reduce((a,m)=>a+Math.abs(+m.qty||0),0);
+  openDrawer(`${esc(l.crop)} ${esc(l.variety||'')}`, `Lot ${esc(l.lotNo||'-')} · ${st(s.color, s.label)}`, `
+    ${specList([
+      ['On hand', `<span class="mono">${fmtLotQty(l)}</span>${(+l.initialQty||0)>0? ` <span class="small-muted">of ${(+l.initialQty).toLocaleString()} ${esc(l.unit)} received</span>`:''}`],
+      ['Drawn by sowing', `<span class="mono">${used.toLocaleString()} ${esc(l.unit)}</span> <span class="small-muted">across ${sownBatches.length} batch${sownBatches.length===1?'':'es'}</span>`],
+      ['Supplier', esc(l.supplier||'-')],
+      ['KEPHIS certificate', `<span class="mono">${esc(l.certNo||'-')}</span>`],
+      ['Class', l.seedClass? st('gold', l.seedClass):'-'],
+      ['Germination', l.germinationPct!=null && l.germinationPct!==''? l.germinationPct+'%' : '-'],
+      ['Received', fmtDate(l.receivedDate)],
+      ['Expiry', l.expiryDate? fmtDate(l.expiryDate) : '-'],
+      ['Cost', l.cost? money(l.cost) : '-'],
+      ['Store', esc(l.location||'-')],
+      ['Notes', esc(l.notes||'')||'-'],
+    ])}
+    <div class="card-title" style="margin-top:16px;">Movements</div>
+    <div class="table-scroll" style="max-height:240px;"><table><thead><tr><th>When</th><th>Type</th><th style="text-align:right;">Qty</th><th>Ref / note</th><th>By</th></tr></thead><tbody>
+      ${(l.movements||[]).length? l.movements.map(m=>`<tr><td class="small-muted">${fmtDT(m.ts)}</td><td>${st(m.type==='received'?'green':m.type==='sown'?'blue':'slate', m.type)}</td><td class="mono" style="text-align:right;">${(+m.qty>0?'+':'')+(+m.qty).toLocaleString()}</td><td>${esc(m.ref||m.note||'')}</td><td>${esc(m.by||'')}</td></tr>`).join('') : '<tr><td colspan="5" class="small-muted">No movements yet.</td></tr>'}
+    </tbody></table></div>
+  `, [
+    {label:'Use for sowing', cls:'leaf', action:()=>{ if(!CURRENT.access.includes('sowing')){ toast('You do not have access to Sowing Data Entry.','err'); return; } closeDrawer(); nav('sowing'); openSowingModal(l.id); }},
+    {label:'Adjust quantity', cls:'secondary', action:()=>openSeedLotAdjust(l.id)},
+    {label:'Edit', cls:'secondary', action:()=>{ closeDrawer(); openSeedLotModal(l.id); }},
+    {label:'Close', cls:'secondary', action:closeDrawer},
+  ]);
+}
+function openSeedLotAdjust(id){
+  const l = (DATA.seedInventory||[]).find(x=>x.id===id); if(!l) return;
+  openModal('Adjust seed lot quantity', `
+    <p class="small-muted" style="margin:0 0 10px;">Lot ${esc(l.lotNo||'-')} · on hand <b class="mono">${fmtLotQty(l)}</b>. Use a negative number for losses (spoilage, germination test, damaged) and a positive number for additions.</p>
+    <div class="form-grid">
+      <div class="field"><label>Change (${esc(l.unit)})</label><input type="number" id="sla-qty" step="any" placeholder="e.g. -200"></div>
+      <div class="field"><label>Reason</label><input id="sla-note" placeholder="e.g. germination test sample"></div>
+    </div>
+  `, [
+    {label:'Cancel', cls:'secondary', action:closeModal},
+    {label:'Apply', cls:'leaf', action:()=>{
+      const d = +document.getElementById('sla-qty').value; const note = document.getElementById('sla-note').value.trim();
+      if(!d){ toast('Enter the quantity change.','err'); return; }
+      if((+l.qty||0) + d < 0){ toast('That would take the lot below zero.','err'); return; }
+      l.qty = (+l.qty||0) + d; if(d>0) l.initialQty = (+l.initialQty||0) + d;
+      l.movements = l.movements||[]; l.movements.unshift({ts:Date.now(), type:'adjust', qty:d, note:note||'Manual adjustment', by:CURRENT.name});
+      logActivity(`Adjusted seed lot ${l.lotNo||l.crop} by ${d>0?'+':''}${d} ${l.unit}${note? ' ('+note+')':''}.`);
+      saveData(); closeModal(); openSeedLotDrawer(id);
+      if(document.getElementById('view-root').dataset.view==='seedinventory') dtRefreshAll('seedlots');
+      toast('Quantity adjusted.');
+    }}
+  ]);
+}
+/* sowing draws from the chosen lot; the sowing record keeps the lot id for traceability */
+function deductSeedLot(lotId, qty, batchCode){
+  const l = (DATA.seedInventory||[]).find(x=>x.id===lotId); if(!l || !(qty>0)) return;
+  l.qty = Math.max(0, (+l.qty||0) - qty);
+  l.movements = l.movements||[]; l.movements.unshift({ts:Date.now(), type:'sown', qty:-qty, ref:batchCode, by:CURRENT.name});
+}
+function onSowingLotChange(lotId){
+  const l = lotId ? (DATA.seedInventory||[]).find(x=>x.id===lotId) : null;
+  const info = document.getElementById('sw-lot-info'); const wrap = document.getElementById('sw-lotqty-wrap');
+  if(!l){ if(info) info.textContent=''; if(wrap) wrap.style.display='none'; return; }
+  const setv = (id,v)=>{ const el=document.getElementById(id); if(el && v!=null && v!=='') el.value=v; };
+  setv('sw-crop', l.crop); setv('sw-variety', l.variety); setv('sw-lot', l.lotNo); setv('sw-source', l.supplier); setv('sw-cert', l.certNo);
+  const cls=document.getElementById('sw-class'); if(cls && l.seedClass) cls.value=l.seedClass;
+  if(l.germinationPct!=null && l.germinationPct!=='') setv('sw-germ', l.germinationPct);
+  if(wrap){ wrap.style.display = l.unit==='seeds' ? 'none' : ''; const u=document.getElementById('sw-lotunit'); if(u) u.textContent=l.unit; }
+  if(info) info.textContent = `${fmtLotQty(l)} left in this lot` + (l.unit==='seeds' ? ' · the quantity sown is drawn from it' : ' · enter the weight used below');
+}
+function exportSeedInventoryExcel(){
+  if(typeof XLSX==='undefined'){ toast('Excel library unavailable - check your connection.','err'); return; }
+  const rows = (DATA.seedInventory||[]).map(l=>({'Lot No.':l.lotNo||'', Crop:l.crop, Variety:l.variety||'', Supplier:l.supplier||'', 'KEPHIS Cert.':l.certNo||'', Class:l.seedClass||'', 'On hand':+l.qty||0, Unit:l.unit, 'Received qty':+l.initialQty||0, 'Germination %':l.germinationPct!=null? l.germinationPct:'', Received:l.receivedDate||'', Expiry:l.expiryDate||'', 'Cost KES':+l.cost||0, Store:l.location||'', Status:seedLotStatus(l).label, Notes:l.notes||''}));
+  if(!rows.length){ toast('No seed lots yet.','err'); return; }
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, excelSheet('Seeds Inventory', rows), 'Seed lots');
+  const moves = (DATA.seedInventory||[]).flatMap(l=>(l.movements||[]).map(m=>({'Lot No.':l.lotNo||'', Crop:l.crop+' '+(l.variety||''), When:new Date(m.ts).toLocaleString('en-KE'), Type:m.type, Qty:+m.qty, Unit:l.unit, 'Ref / note':m.ref||m.note||'', By:m.by||''})));
+  if(moves.length) XLSX.utils.book_append_sheet(wb, excelSheet('Seed movements', moves), 'Movements');
+  XLSX.writeFile(wb, `SPN_Seeds_Inventory_${Date.now()}.xlsx`);
+  logActivity('Exported the seeds inventory to Excel.');
+}
+/* dashboard card: lots that need a decision */
+function seedAttentionCardHTML(){
+  if(!CURRENT.access.includes('seedinventory')) return '';
+  const attn = seedAttention();
+  if(!attn.length) return '';
+  return `<div class="card b6"><div class="card-title">Seed lots needing attention · ${attn.length}</div>
+    ${attn.slice(0,6).map(({l,s})=>`<div class="queue-row" style="cursor:pointer;" onclick="nav('seedinventory');openSeedLotDrawer('${l.id}')"><div style="min-width:0;"><div style="font-weight:600;">${esc(l.crop)} ${esc(l.variety||'')} <span class="mono small-muted">${esc(l.lotNo||'')}</span></div><div class="small-muted">${fmtLotQty(l)} on hand${l.expiryDate? ' · expiry '+fmtDate(l.expiryDate):''}</div></div>${st(s.color, s.label)}</div>`).join('')}
+    ${attn.length>6? `<div class="small-muted" style="margin-top:6px;">+${attn.length-6} more in Seeds Inventory</div>`:''}
+  </div>`;
+}
+
 function renderSowing(root){
   root.innerHTML = `
   <div class="view-header"><div><h2>Sowing Data Entry</h2><p>Statutory record for every batch sown - seed source, lot, certificate and class, per the Seeds & Plant Varieties Act and KEPHIS requirements. Ready Days drives the Sown Seed Status and Seedling Stock views automatically.</p></div>
   <div style="display:flex;gap:8px;flex-wrap:wrap;">
+    ${CURRENT.access.includes('seedinventory')? `<button class="btn secondary" onclick="nav('seedinventory')">Seeds inventory</button>` : ''}
     <button class="btn secondary" onclick="exportSowingExcel()">⬇ Excel</button>
     <button class="btn secondary" onclick="exportSowingPDF()">⬇ PDF</button>
     <button class="btn" onclick="openSowingModal()">+ New sowing record</button>
@@ -3230,9 +4021,13 @@ function exportSowingPDF(){
   doc.save(`SPN_Sowing_Records_${Date.now()}.pdf`);
   logActivity('Exported sowing data entry list to PDF.');
 }
-function openSowingModal(){
+function openSowingModal(presetLotId){
   openModal('New Sowing Record', `
     <div class="form-grid c3" style="grid-template-columns:repeat(4,1fr);gap:8px 12px;">
+      <div class="field field-full"><label style="font-size:10.8px;">Seed lot from inventory <span class="small-muted">(optional - fills the seed details and draws the quantity from stock)</span></label>
+        <select id="sw-lotsel" style="padding:6px 8px;" onchange="onSowingLotChange(this.value)"><option value="">- Not from inventory: type the seed details below -</option>${seedLotsAvailable().map(l=>`<option value="${l.id}">${esc(lotLabel(l))}</option>`).join('')}</select>
+        <small id="sw-lot-info"></small></div>
+      <div class="field" id="sw-lotqty-wrap" style="display:none;"><label style="font-size:10.8px;">Quantity used from lot (<span id="sw-lotunit">g</span>)</label><input type="number" id="sw-lotqty" style="padding:6px 8px;" min="0" step="any" placeholder="weight taken from the lot"></div>
       <div class="field"><label style="font-size:10.8px;">Batch Code <span class="req">*</span></label><input class="mono" id="sw-batch" style="padding:6px 8px;" value="SPN-${new Date().getMonth()+1<10?'0':''}${new Date().getMonth()+1}${String(new Date().getFullYear()).slice(2)}-${String(DATA.sowingRecords.length+1).padStart(2,'0')}"></div>
       <div class="field"><label style="font-size:10.8px;">Crop Type <span class="req">*</span></label><input id="sw-crop" style="padding:6px 8px;" list="crop-list" placeholder="Type or pick"><datalist id="crop-list">${COMMON_CROPS.map(c=>`<option value="${c}">`).join('')}</datalist></div>
       <div class="field"><label style="font-size:10.8px;">Variety <span class="req">*</span></label><input id="sw-variety" style="padding:6px 8px;" placeholder="e.g. Zara F1"></div>
@@ -3245,7 +4040,7 @@ function openSowingModal(){
       <div class="field"><label style="font-size:10.8px;">Ready Days <span class="req">*</span></label><input type="number" id="sw-ready" style="padding:6px 8px;" value="30" min="1"></div>
       <div class="field"><label style="font-size:10.8px;">Greenhouse / Bay</label><input id="sw-bay" style="padding:6px 8px;" placeholder="e.g. Greenhouse A"></div>
       <div class="field"><label style="font-size:10.8px;">Germination %</label><input type="number" id="sw-germ" style="padding:6px 8px;" value="95" min="0" max="100"></div>
-      <div class="field field-full"><label style="font-size:10.8px;">Sown By</label><select id="sw-by" style="padding:6px 8px;">${DATA.staff.map(s=>`<option>${esc(s.name)}</option>`).join('')}</select></div>
+      <div class="field field-full"><label style="font-size:10.8px;">Sown By</label><select id="sw-by" style="padding:6px 8px;">${(()=>{ const names=[...new Set([CURRENT.name, ...DATA.users.filter(u=>(u.status||'Active')!=='Pending').map(u=>u.name), ...DATA.staff.map(s=>s.name)].filter(Boolean))]; return names.map(n=>`<option ${n===CURRENT.name?'selected':''}>${esc(n)}</option>`).join(''); })()}</select></div>
     </div>
   `, [
     {label:'Cancel', cls:'secondary', action:closeModal},
@@ -3255,16 +4050,28 @@ function openSowingModal(){
       const batch=document.getElementById('sw-batch').value.trim();
       const readyDays=+document.getElementById('sw-ready').value;
       if(!variety||!batch||!crop||!readyDays){toast('Batch code, crop type, variety and ready days are required.','err');return;}
+      /* seed drawn from an inventory lot: seeds by count, or a weight for g/kg lots */
+      const lotSel = document.getElementById('sw-lotsel');
+      const lot = (lotSel && lotSel.value) ? (DATA.seedInventory||[]).find(l=>l.id===lotSel.value) : null;
+      let lotUse = 0;
+      if(lot){
+        lotUse = lot.unit==='seeds' ? (+document.getElementById('sw-qty').value||0) : (+document.getElementById('sw-lotqty').value||0);
+        if(!(lotUse>0)){ toast(lot.unit==='seeds' ? 'Enter the quantity sown.' : `Enter the quantity used from the seed lot (${lot.unit}).`,'err'); return; }
+        if(lotUse > (+lot.qty||0) + 1e-9){ toast(`Only ${fmtLotQty(lot)} left in lot ${lot.lotNo||lot.crop}.`,'err'); return; }
+      }
       DATA.sowingRecords.push({id:uid('sw'), batchCode:batch, crop, variety,
         seedLot:document.getElementById('sw-lot').value, seedSource:document.getElementById('sw-source').value,
         certNo:document.getElementById('sw-cert').value, seedClass:document.getElementById('sw-class').value,
         qty:+document.getElementById('sw-qty').value, dateSown:document.getElementById('sw-date').value, readyDays,
         bay:document.getElementById('sw-bay').value, germinationPct:+document.getElementById('sw-germ').value,
-        sownBy:document.getElementById('sw-by').value});
-      logActivity(`Logged sowing record ${batch} (${crop} - ${variety}), ready in ${readyDays} days.`);
-      closeModal(); renderSowing(document.getElementById('view-root')); toast('Sowing record saved.');
+        sownBy:document.getElementById('sw-by').value || CURRENT.name, seedLotId: lot? lot.id : null, seedLotUse: lot? lotUse : null});
+      if(lot) deductSeedLot(lot.id, lotUse, batch);
+      logActivity(`Logged sowing record ${batch} (${crop} - ${variety}), ready in ${readyDays} days${lot? ', '+lotUse+' '+lot.unit+' drawn from seed lot '+(lot.lotNo||lot.crop) : ''}.`);
+      saveData();
+      closeModal(); renderSowing(document.getElementById('view-root')); toast(lot? 'Sowing record saved · seed lot updated.' : 'Sowing record saved.');
     }}
   ], {wide:true, compact:true});
+  if(presetLotId){ const sel = document.getElementById('sw-lotsel'); if(sel){ sel.value = presetLotId; onSowingLotChange(presetLotId); } }
 }
 
 /* ================= SOWN SEED STATUS ================= */
@@ -3337,7 +4144,7 @@ function renderSownStatusGrid(){
 function renderSeedlingStock(root){
   const rows = DATA.sowingRecords.map(r=>{
     const c = computeStage(r);
-    const viableQty = Math.round(r.qty * (r.germinationPct/100));
+    const viableQty = batchRemaining(r); /* viable seedlings still in the nursery (sales and closed batches deducted) */
     return {id:r.id, r, c, viableQty};
   });
   const readyRows = rows.filter(x=>x.c.stage===4);
@@ -3370,7 +4177,8 @@ function renderSeedlingStock(root){
     ],
     rowMenu: x=>[
       {label:'Open batch details', run:()=>openBatchDrawer(x.id)},
-      {label:'Sell from this batch', run:()=>{ if(CURRENT.access.includes('cashsale')){ nav('cashsale'); openSaleModal(); } else toast('You do not have POS access.','err'); }},
+      ...(computeStage(r).stage===4 && batchRemaining(r)>0 ? [{label:'Sell from this batch', run:()=>{ if(CURRENT.access.includes('cashsale')){ nav('cashsale'); openSaleModal(r.id); } else toast('You do not have POS access.','err'); }}] : []),
+      {label: r.closed? 'Reopen batch' : 'Mark sold out / transplanted', run:()=>{ r.closed = !r.closed; logActivity(`${r.closed? 'Closed' : 'Reopened'} seedling batch ${r.batchCode} (${r.crop} ${r.variety}).`); saveData(); renderSeedlingStock(document.getElementById('view-root')); toast(r.closed? 'Batch closed; it no longer counts as stock.' : 'Batch reopened.'); }},
     ],
   })}
   `;
@@ -3504,7 +4312,7 @@ function renderHerdInventory(root){
   const bySpecies = {};
   active.forEach(a=>{ bySpecies[a.species] = (bySpecies[a.species]||0)+(a.qty||1); });
   const monthStart = new Date(); monthStart.setDate(1);
-  const added = herd.filter(a=>a.acquiredDate && a.acquiredDate >= monthStart.toISOString().slice(0,10)).reduce((x,a)=>x+(a.qty||1),0);
+  const added = herd.filter(a=>a.acquiredDate && a.acquiredDate >= isoDate(monthStart)).reduce((x,a)=>x+(a.qty||1),0);
   root.innerHTML = `
   <div class="view-header"><div><h2>Livestock</h2><p>Herd and flock inventory with valuation, plus tropical feed guidance and an AI photo weight estimator. Poultry can be tracked as flocks using the quantity field.</p></div>
   <div style="display:flex;gap:8px;flex-wrap:wrap;">
@@ -3528,7 +4336,7 @@ function renderHerdInventory(root){
     onRowClick:'openHerdDrawer',
     emptyTitle:'No livestock registered', emptyText:'Add your first animal or flock with the button above.',
     columns:[
-      {key:'photo', label:'', sortable:false, val:a=>'', html:a=> (a.photos&&a.photos[0])? `<img src="${esc(a.photos[0].src)}" alt="" style="width:38px;height:38px;object-fit:cover;border-radius:8px;border:1px solid var(--line);display:block;">` : `<div style="width:38px;height:38px;border-radius:8px;background:var(--mint-soft);display:flex;align-items:center;justify-content:center;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6F9B62" stroke-width="1.8"><path d="M4 10c0-2 1.5-3 3-3s2 1 3 1 1-1 3-1 3 1 3 3"/><path d="M4 10v4a2 2 0 002 2h1l1 3M18 10v4a2 2 0 01-2 2h-1l-1 3"/></svg></div>`},
+      {key:'photo', label:'', sortable:false, val:a=>'', html:a=> (a.photos&&a.photos[0])? `<img src="${esc(fileUrl(a.photos[0].src))}" alt="" style="width:38px;height:38px;object-fit:cover;border-radius:8px;border:1px solid var(--line);display:block;">` : `<div style="width:38px;height:38px;border-radius:8px;background:var(--mint-soft);display:flex;align-items:center;justify-content:center;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6F9B62" stroke-width="1.8"><path d="M4 10c0-2 1.5-3 3-3s2 1 3 1 1-1 3-1 3 1 3 3"/><path d="M4 10v4a2 2 0 002 2h1l1 3M18 10v4a2 2 0 01-2 2h-1l-1 3"/></svg></div>`},
       {key:'tag', label:'Tag / Name', val:a=>a.tag, html:a=>`<span class="mono">${esc(a.tag)}</span>`},
       {key:'species', label:'Species', val:a=>SPECIES_LABEL(a.species)},
       {key:'breed', label:'Breed', val:a=>a.breed||'-'},
@@ -3571,7 +4379,7 @@ function openHerdDrawer(id){
     ])}
     <div class="section-title" style="margin-top:18px;">Photos<div class="line"></div></div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;">
-      ${(a.photos||[]).map((ph,i)=>`<div style="position:relative;"><a href="${esc(ph.src)}" target="_blank"><img src="${esc(ph.src)}" alt="" style="width:96px;height:96px;object-fit:cover;border-radius:10px;border:1px solid var(--line);display:block;"></a><button class="x-close" title="Remove photo" style="position:absolute;top:3px;right:3px;background:rgba(255,255,255,.88);border-radius:6px;font-size:16px;" onclick="removeHerdPhoto('${a.id}',${i})">×</button></div>`).join('')}
+      ${(a.photos||[]).map((ph,i)=>`<div style="position:relative;"><a href="${esc(fileUrl(ph.src))}" target="_blank"><img src="${esc(fileUrl(ph.src))}" alt="" style="width:96px;height:96px;object-fit:cover;border-radius:10px;border:1px solid var(--line);display:block;"></a><button class="x-close" title="Remove photo" style="position:absolute;top:3px;right:3px;background:rgba(255,255,255,.88);border-radius:6px;font-size:16px;" onclick="removeHerdPhoto('${a.id}',${i})">×</button></div>`).join('')}
       <label style="width:96px;height:96px;border:1.5px dashed var(--sage);border-radius:10px;display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;background:var(--mint-soft);color:var(--forest);font-size:11.5px;font-weight:600;gap:4px;">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 8V5a1 1 0 011-1h3M20 8V5a1 1 0 00-1-1h-3M4 16v3a1 1 0 001 1h3M20 16v3a1 1 0 01-1 1h-3"/><circle cx="12" cy="12" r="3.4"/></svg>Add photo
         <input type="file" accept="image/*" capture="environment" style="display:none" onchange="addHerdPhoto('${a.id}', this.files[0])">
@@ -3651,11 +4459,18 @@ function downscaleImage(file, maxPx, quality){
   });
 }
 async function storePhoto(dataUrl){
-  if(SERVER_MODE && API.token){
-    const res = await API.req('files', {method:'POST', body:{mime:'image/jpeg', data:dataUrl.split(',')[1]}});
-    return {src:'/api/files/'+res.id, fileId:res.id};
+  if(SERVER_MODE && API.token && !OFFLINE){
+    try{
+      const res = await API.req('files', {method:'POST', body:{mime:'image/jpeg', data:dataUrl.split(',')[1]}});
+      return {src:'/api/files/'+res.id, fileId:res.id};
+    }catch(e){
+      if(!isNetworkError(e)) throw e;
+      goOffline();
+    }
   }
-  return {src:dataUrl, fileId:null};
+  /* offline (or standalone): keep the downscaled image inline; it is uploaded and
+     swapped for a server reference by flushPendingPhotos() once back online */
+  return {src:dataUrl, fileId:null, pending: SERVER_MODE ? true : undefined};
 }
 async function addHerdPhoto(id, file){
   const a = (DATA.livestockInventory||[]).find(x=>x.id===id);
@@ -3877,22 +4692,33 @@ function approvePR(id){
   const p=DATA.procurement.find(x=>x.id===id);
   if(p){p.status='Approved - PO Issued'; logActivity(`Approved PR ${p.prNo} - PO issued to ${p.supplier}.`); saveData(); if(document.querySelector('.sb-item.active')?.dataset.key==='procurement'){ renderProcurement(document.getElementById('view-root')); } else { renderDashboard(document.getElementById('view-root')); } toast('Purchase order issued.');}
 }
+/* PR numbers continue from the highest existing number (deletes and concurrent
+   devices no longer reissue a number) */
+function nextPrNo(){ const nums = DATA.procurement.map(p=>parseInt(String(p.prNo||'').replace(/\D/g,''),10)).filter(n=>!isNaN(n)); return 'PR-'+String((nums.length? Math.max(...nums) : 231)+1).padStart(4,'0'); }
 function markPRDelivered(id){
   const p=DATA.procurement.find(x=>x.id===id);
   if(!p) return;
   p.status='Delivered'; p.deliveredAt=Date.now(); p.deliveredBy=CURRENT.name;
   logActivity(`${CURRENT.name} marked PR ${p.prNo} (${p.item}) as delivered.`);
   const matchedItem = DATA.consumables.find(c=>c.name.toLowerCase().includes(p.item.toLowerCase())||p.item.toLowerCase().includes(c.name.toLowerCase()));
-  if(matchedItem && confirm(`Add ${p.qty} ${p.unit} of "${matchedItem.name}" to Consumables Stock now that it's delivered?`)){
-    matchedItem.qty += p.qty;
-    logActivity(`Received ${p.qty} ${p.unit} of ${matchedItem.name} into stock from PR ${p.prNo}.`);
+  const unitCost = (p.qty>0 && p.estCost>0) ? Math.round(p.estCost/p.qty) : 0;
+  if(matchedItem){
+    const unitNote = (matchedItem.unit||'').toLowerCase()!==(p.unit||'').toLowerCase() ? ` Note: the PR is in ${p.unit} but stock is kept in ${matchedItem.unit}; add only if they are the same measure.` : '';
+    if(confirm(`Add ${p.qty} ${p.unit} of "${matchedItem.name}" to Consumables Stock now that it's delivered?${unitNote}`)){
+      matchedItem.qty += p.qty;
+      if(unitCost) matchedItem.unitCost = unitCost; /* latest purchase price drives the stock valuation */
+      logActivity(`Received ${p.qty} ${p.unit} of ${matchedItem.name} into stock from PR ${p.prNo}.`);
+    }
+  } else if(confirm(`No consumable matches "${p.item}". Add it to Consumables Stock as a new item (${p.qty} ${p.unit})?`)){
+    DATA.consumables.push({id:uid('c'), name:p.item, unit:p.unit||'pcs', qty:+p.qty||0, reorder:Math.max(1, Math.round((+p.qty||0)*0.2)), unitCost});
+    logActivity(`Added ${p.item} to consumables stock (${p.qty} ${p.unit}) from delivered PR ${p.prNo}.`);
   }
   saveData(); renderProcurement(document.getElementById('view-root')); toast('Marked as delivered.');
 }
 function openPRModal(){
   openModal('New Purchase Request', `
     <div class="form-grid">
-      <div class="field"><label>PR No.</label><input class="mono" id="pr-no" value="PR-0${232+DATA.procurement.length}" readonly></div>
+      <div class="field"><label>PR No.</label><input class="mono" id="pr-no" value="${nextPrNo()}" readonly></div>
       <div class="field"><label>Item <span class="req">*</span></label><input id="pr-item" placeholder="e.g. Coco Peat"></div>
       <div class="field"><label>Quantity</label><input type="number" id="pr-qty" value="10"></div>
       <div class="field"><label>Unit</label><input id="pr-unit" placeholder="e.g. bale / kg / pcs"></div>
@@ -4327,7 +5153,7 @@ function renderFarm(root){
       {key:'day', label:'Crop day', val:p=>plotProgress(p).day, html:p=>{ const pr=plotProgress(p); return `<div class="mono" style="font-size:12px;">Day ${pr.day} of ${pr.total}</div><div class="progress-line" style="width:90px;margin-top:3px;"><i style="width:${pr.pct}%;"></i></div>`; }},
       {key:'stage', label:'Development stage', val:p=>plotProgress(p).stageIdx, html:p=>plotStageChip(plotProgress(p), p.status)},
       {key:'harvest', label:'Expected harvest', val:p=>plotProgress(p).harvestDate||'', html:p=>{ const pr=plotProgress(p); return pr.harvestDate? fmtDate(pr.harvestDate)+` <span class="small-muted">(${pr.due? 'due' : pr.daysLeft+'d'})</span>` : '-'; }},
-      {key:'gps', label:'GPS', sortable:false, val:p=>'', html:p=>p.lat!=null? `<a class="map-link" target="_blank" onclick="event.stopPropagation()" href="https://www.google.com/maps?q=${p.lat},${p.lng}">📍 ${(+p.lat).toFixed(3)}, ${(+p.lng).toFixed(3)}</a>` : '<span class="small-muted">-</span>'},
+      {key:'gps', label:'GPS', sortable:false, val:p=>'', html:p=>p.lat!=null? `<a class="map-link" target="_blank" onclick="event.stopPropagation()" href="${mapsUrl(p.lat,p.lng)}">📍 ${(+p.lat).toFixed(3)}, ${(+p.lng).toFixed(3)}</a>` : '<span class="small-muted">-</span>'},
       {key:'status', label:'Status', val:p=>p.status||'Active', html:p=>p.status==='Harvested'? st('slate','Harvested') : st('green','Active')},
     ],
     rowMenu: p=>[
@@ -4362,7 +5188,7 @@ function openPlotDrawer(id){
       ['Total crop days', `<span class="mono">${pr.total}</span>`],
       ['Expected harvest', pr.harvestDate? fmtDate(pr.harvestDate) : '-'],
       ['Soil', esc(p.soil||'-')],
-      ['Location', p.lat!=null? `<a class="map-link" target="_blank" href="https://www.google.com/maps?q=${p.lat},${p.lng}">📍 ${(+p.lat).toFixed(5)}, ${(+p.lng).toFixed(5)}</a>${p.altitude!=null? ' <span class="small-muted">· alt ~'+p.altitude+'m</span>':''}` : '<span class="small-muted">No GPS captured yet</span>'],
+      ['Location', p.lat!=null? `<a class="map-link" target="_blank" href="${mapsUrl(p.lat,p.lng)}">📍 ${(+p.lat).toFixed(5)}, ${(+p.lng).toFixed(5)}</a>${p.altitude!=null? ' <span class="small-muted">· alt ~'+p.altitude+'m</span>':''}` : '<span class="small-muted">No GPS captured yet</span>'],
       ['Boundary', p.boundary&&p.boundary.length? p.boundary.length+' GPS points (from acreage measurement)' : '-'],
       ['Rainfall since planting', `<span class="mono">${rainSince.toFixed(1)} mm</span> <span class="small-muted">(gauge log)</span>`],
       ['Notes', esc(p.notes)||'-'],
@@ -4689,13 +5515,24 @@ async function fetchElevation(lat,lng){
 async function fetchWeather(){
   const loc = DATA.weatherLocation;
   const key = `${loc.lat},${loc.lng},${loc.elevation}`;
-  if(weatherCache && weatherCacheKey===key) return weatherCache;
+  const online = !OFFLINE && !(typeof navigator!=='undefined' && navigator.onLine===false);
+  /* a forecast served from the offline cache is refreshed as soon as we are online again */
+  if(weatherCache && weatherCacheKey===key && !(weatherCache.__cachedAt && online)) return weatherCache;
+  /* offline: the last successful forecast for this location is kept on the device */
+  const WX_CACHE = 'spn_weather_cache';
+  if(OFFLINE || (typeof navigator!=='undefined' && navigator.onLine===false)){
+    try{ const c = JSON.parse(localStorage.getItem(WX_CACHE)||'null'); if(c && c.key===key){ weatherCache = c.data; weatherCacheKey = key; weatherCache.__cachedAt = c.ts; return weatherCache; } }catch(e){}
+  }
   try{
     const r = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${loc.lat}&longitude=${loc.lng}&elevation=${loc.elevation||''}&daily=weathercode,temperature_2m_max,temperature_2m_min,precipitation_probability_max,precipitation_sum,et0_fao_evapotranspiration&hourly=relative_humidity_2m&current_weather=true&forecast_days=16&timezone=Africa%2FNairobi`);
     weatherCache = await r.json();
     weatherCacheKey = key;
+    try{ localStorage.setItem(WX_CACHE, JSON.stringify({key, ts:Date.now(), data:weatherCache})); }catch(e){}
     return weatherCache;
-  }catch(e){ return null; }
+  }catch(e){
+    try{ const c = JSON.parse(localStorage.getItem(WX_CACHE)||'null'); if(c && c.key===key){ weatherCache = c.data; weatherCacheKey = key; weatherCache.__cachedAt = c.ts; return weatherCache; } }catch(e2){}
+    return null;
+  }
 }
 async function fetchClimatologicalOutlook(offsetStart, offsetEnd){
   const loc = DATA.weatherLocation;
@@ -4707,7 +5544,7 @@ async function fetchClimatologicalOutlook(offsetStart, offsetEnd){
   for(const yr of years){
     const s = new Date(start); s.setFullYear(yr);
     const e = new Date(end); e.setFullYear(yr);
-    const sStr = s.toISOString().slice(0,10), eStr = e.toISOString().slice(0,10);
+    const sStr = isoDate(s), eStr = isoDate(e);
     try{
       const r = await fetch(`https://archive-api.open-meteo.com/v1/archive?latitude=${loc.lat}&longitude=${loc.lng}&elevation=${loc.elevation||''}&start_date=${sStr}&end_date=${eStr}&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,et0_fao_evapotranspiration&timezone=Africa%2FNairobi`);
       const d = await r.json();
@@ -5006,7 +5843,7 @@ async function loadAdvisoryPanel(){
   if(!w || !w.daily){ panel.innerHTML = '<div class="empty"><b>Forecast unavailable</b></div>'; return; }
   const days16 = w.daily.time.slice(0,16).map((t,i)=>({date:t, max:w.daily.temperature_2m_max[i], min:w.daily.temperature_2m_min[i], rain:w.daily.precipitation_probability_max[i], precip:w.daily.precipitation_sum[i], evap:w.daily.et0_fao_evapotranspiration?w.daily.et0_fao_evapotranspiration[i]:null}));
   const outlook4 = await fetchClimatologicalOutlook(17,20);
-  const days4 = (outlook4||[]).map(o=>{ const d=new Date(); d.setDate(d.getDate()+o.offsetDay); return {date:d.toISOString().slice(0,10), max:o.max, min:o.min, rain:null, precip:o.precip, evap:o.evap}; });
+  const days4 = (outlook4||[]).map(o=>{ const d=new Date(); d.setDate(d.getDate()+o.offsetDay); return {date:isoDate(d), max:o.max, min:o.min, rain:null, precip:o.precip, evap:o.evap}; });
   const all20 = days16.concat(days4);
   const renderAdvisory = (advisory, note)=>{
     panel.innerHTML = `
@@ -5602,14 +6439,14 @@ function openReportViewersModal(key){
 function buildReport(key){
   const stamp = 'Generated '+new Date().toLocaleString('en-KE')+' by '+CURRENT.name+' ('+CURRENT.designation+')';
   if(key==='production'){
-    const rows = DATA.sowingRecords.map(r=>{ const c=computeStage(r); const v=Math.round(r.qty*r.germinationPct/100);
-      return [r.batchCode, r.crop, r.variety, fmtDate(r.dateSown), r.qty.toLocaleString(), r.germinationPct+'%', v.toLocaleString(), STAGES[c.stage-1], fmtDate(c.readyDate)]; });
+    const rows = DATA.sowingRecords.map(r=>{ const c=computeStage(r); const v=batchViable(r), sold=soldFromBatch(r), rem=batchRemaining(r);
+      return [r.batchCode, r.crop, r.variety, fmtDate(r.dateSown), r.qty.toLocaleString(), r.germinationPct+'%', v.toLocaleString(), sold.toLocaleString(), rem.toLocaleString(), r.closed? 'Closed' : STAGES[c.stage-1], fmtDate(c.readyDate)]; });
     const totalSown = DATA.sowingRecords.reduce((a,b)=>a+b.qty,0);
-    const totalViable = DATA.sowingRecords.reduce((a,b)=>a+Math.round(b.qty*b.germinationPct/100),0);
-    const ready = DATA.sowingRecords.filter(r=>computeStage(r).stage===4).reduce((a,b)=>a+Math.round(b.qty*b.germinationPct/100),0);
+    const totalViable = DATA.sowingRecords.reduce((a,b)=>a+batchRemaining(b),0);
+    const ready = DATA.sowingRecords.filter(r=>computeStage(r).stage===4).reduce((a,b)=>a+batchRemaining(b),0);
     const avgGerm = DATA.sowingRecords.length? (DATA.sowingRecords.reduce((a,b)=>a+b.germinationPct,0)/DATA.sowingRecords.length).toFixed(1):'0';
     return { title:'Nursery Production Report', subtitle:stamp,
-      sections:[{heading:'Production by batch', head:['Batch','Crop','Variety','Sown','Qty Sown','Germ. %','Est. Viable','Stage','Ready Date'], rows}],
+      sections:[{heading:'Production by batch', head:['Batch','Crop','Variety','Sown','Qty Sown','Germ. %','Est. Viable','Sold','Remaining','Stage','Ready Date'], rows}],
       summary:[['Batches', DATA.sowingRecords.length], ['Total seeds sown', totalSown.toLocaleString()], ['Estimated viable seedlings', totalViable.toLocaleString()], ['Ready for sale now', ready.toLocaleString()], ['Average germination', avgGerm+'%']] };
   }
   if(key==='compliance'){
@@ -5620,15 +6457,23 @@ function buildReport(key){
       summary:[['Batches on register', DATA.sowingRecords.length], ['Batches with traceability gaps', gaps]] };
   }
   if(key==='sales'){
-    const rows = DATA.cashSales.map(s=>[s.receiptNo, fmtDate(s.date), s.customer, s.kraPin||'-', s.crop, s.qty.toLocaleString(), money(s.unitPrice), money(s.total), s.vat, s.payment, s.servedBy]);
-    const revenue = DATA.cashSales.reduce((a,b)=>a+b.total,0);
+    const sales = DATA.cashSales.slice().sort((a,b)=>(a.date||'')<(b.date||'')?-1:1);
+    const vatOf = s => s.vatAmount!=null ? +s.vatAmount : (s.vat==='Standard 16%' ? Math.round(s.total - s.total/1.16) : 0);
+    const rows = sales.map(s=>[s.receiptNo, fmtDate(s.date), s.customer, s.kraPin||'-', s.crop+(s.batchCode? ' ('+s.batchCode+')':''), s.qty.toLocaleString(), money(s.unitPrice), money(s.total), s.vat, money(vatOf(s)), s.payment, s.servedBy]);
+    const revenue = sales.reduce((a,b)=>a+b.total,0);
+    const vatTotal = sales.reduce((a,b)=>a+vatOf(b),0);
+    const byMonth = {}; sales.forEach(s=>{ const m=(s.date||'').slice(0,7); byMonth[m]=(byMonth[m]||0)+s.total; });
+    const monthRows = Object.keys(byMonth).sort().map(m=>[m, money(byMonth[m])]);
     return { title:'Cash Sales & VAT Summary', subtitle:stamp, landscape:true,
-      sections:[{heading:'Sales register', head:['Receipt','Date','Customer','KRA PIN','Item','Qty','Unit Price','Total','VAT Treatment','Payment','Served By'], rows}],
-      summary:[['Receipts', DATA.cashSales.length], ['Seedlings sold', DATA.cashSales.reduce((a,b)=>a+b.qty,0).toLocaleString()], ['Total revenue', money(revenue)], ['Company KRA PIN', DATA.companyKraPin||'Not set']] };
+      sections:[
+        {heading:'Sales register', head:['Receipt','Date','Customer','KRA PIN','Item (batch)','Qty','Unit Price','Total','VAT Treatment','VAT (KES)','Payment','Served By'], rows},
+        {heading:'Revenue by month', head:['Month','Revenue'], rows: monthRows.length? monthRows : [['-','-']]},
+      ],
+      summary:[['Receipts', sales.length], ['Seedlings sold', sales.reduce((a,b)=>a+b.qty,0).toLocaleString()], ['Total revenue', money(revenue)], ['VAT in standard-rated sales (16% inclusive)', money(vatTotal)], ['Company KRA PIN', DATA.companyKraPin||'Not set']] };
   }
   if(key==='stock'){
     const cons = DATA.consumables.map(c=>[c.name, c.qty+' '+c.unit, money(c.unitCost), money(c.qty*c.unitCost), c.qty<=c.reorder?'Reorder':'Healthy']);
-    const seed = DATA.sowingRecords.map(r=>{ const c=computeStage(r); return [r.batchCode, r.crop+' '+r.variety, Math.round(r.qty*r.germinationPct/100).toLocaleString(), STAGES[c.stage-1], fmtDate(c.readyDate)]; });
+    const seed = DATA.sowingRecords.map(r=>{ const c=computeStage(r); return [r.batchCode, r.crop+' '+r.variety, batchRemaining(r).toLocaleString(), STAGES[c.stage-1], fmtDate(c.readyDate)]; });
     const herd = (DATA.livestockInventory||[]).filter(a=>a.status==='Active').map(a=>[a.tag, SPECIES_LABEL(a.species), (a.qty||1).toLocaleString(), a.weightKg? a.weightKg+' kg':'-', money(a.cost||0)]);
     const consValue = DATA.consumables.reduce((a,b)=>a+b.qty*b.unitCost,0);
     const herdValue = (DATA.livestockInventory||[]).filter(a=>a.status==='Active').reduce((x,a)=>x+(a.cost||0),0);
@@ -5639,7 +6484,7 @@ function buildReport(key){
     if(herd.length) sections.push({heading:'Livestock (active)', head:['Tag','Species','Qty','Avg Weight','Value'], rows:herd});
     return { title:'Stock Valuation Report', subtitle:stamp,
       sections,
-      summary:[['Consumables value at cost', money(consValue)], ['Consumable lines', DATA.consumables.length], ['Seedling batches', DATA.sowingRecords.length], ['Est. viable seedlings', DATA.sowingRecords.reduce((a,b)=>a+Math.round(b.qty*b.germinationPct/100),0).toLocaleString()], ['Livestock value (acquisition)', money(herdValue)]] };
+      summary:[['Consumables value at cost', money(consValue)], ['Consumable lines', DATA.consumables.length], ['Seedling batches', DATA.sowingRecords.length], ['Est. viable seedlings', DATA.sowingRecords.reduce((a,b)=>a+batchRemaining(b),0).toLocaleString()], ['Livestock value (acquisition)', money(herdValue)]] };
   }
   if(key==='hr'){
     const rows = DATA.staff.map(s=>[s.name, s.idNo||'-', s.phone||'-', s.type, s.casualId||'-', s.department||'-', fmtDate(s.dateJoined), s.idUploaded?'Yes':'No', (s.rating||0)+'/5']);
@@ -5659,6 +6504,30 @@ function buildReport(key){
         ['Staff on payroll', paid.length + (DATA.staff.length-paid.length? ' ('+(DATA.staff.length-paid.length)+' without a salary set)':'')],
         ['Monthly gross payroll', money(tot.gross)], ['Total statutory deductions', money(tot.stat)], ['Monthly net payroll', money(tot.net)],
         ['Note', 'Verify rates with your payroll accountant or KRA before filing']] };
+  }
+  if(key==='procurement'){
+    const prs = DATA.procurement.slice().sort((a,b)=>(b.requestedAt||0)-(a.requestedAt||0));
+    const rows = prs.map(p=>[p.prNo, p.item, (p.qty||0).toLocaleString()+' '+(p.unit||''), p.supplier||'-', money(p.estCost||0), p.status, p.requestedBy||'-', p.requestedAt? fmtDT(p.requestedAt):'-', p.dateNeeded? fmtDate(p.dateNeeded):'-', p.deliveredAt? fmtDT(p.deliveredAt):'-']);
+    const open = prs.filter(p=>p.status==='Pending Approval'), ordered = prs.filter(p=>/Approved/.test(p.status||'')), delivered = prs.filter(p=>p.status==='Delivered');
+    const monthStart = new Date(); monthStart.setDate(1); monthStart.setHours(0,0,0,0);
+    const deliveredThisMonth = delivered.filter(p=>(p.deliveredAt||0)>=monthStart.getTime()).reduce((a,p)=>a+(p.estCost||0),0);
+    return { title:'Procurement Report', subtitle:stamp, landscape:true,
+      sections:[{heading:'Purchase requests and orders', head:['PR No.','Item','Qty','Supplier','Est. cost','Status','Requested by','Requested','Needed by','Delivered'], rows: rows.length? rows : [['-','No purchase requests yet','-','-','-','-','-','-','-','-']]}],
+      summary:[['Purchase requests', prs.length], ['Awaiting approval', open.length+' ('+money(open.reduce((a,p)=>a+(p.estCost||0),0))+')'], ['Approved / PO issued, awaiting delivery', ordered.length+' ('+money(ordered.reduce((a,p)=>a+(p.estCost||0),0))+')'], ['Delivered', delivered.length+' ('+money(delivered.reduce((a,p)=>a+(p.estCost||0),0))+')'], ['Delivered value this month', money(deliveredThisMonth)]] };
+  }
+  if(key==='seeds'){
+    const lots = (DATA.seedInventory||[]).slice().sort((a,b)=>(a.crop+a.variety).localeCompare(b.crop+b.variety));
+    const rows = lots.map(l=>{ const used=(l.movements||[]).filter(m=>m.type==='sown').reduce((a,m)=>a+Math.abs(+m.qty||0),0); const s=seedLotStatus(l);
+      return [l.lotNo||'-', l.crop+' '+(l.variety||''), l.supplier||'-', l.certNo||'-', l.seedClass||'-', ((+l.initialQty||0).toLocaleString())+' '+l.unit, used.toLocaleString()+' '+l.unit, fmtLotQty(l), l.germinationPct!=null && l.germinationPct!==''? l.germinationPct+'%':'-', fmtDate(l.receivedDate), l.expiryDate? fmtDate(l.expiryDate):'-', s.label]; });
+    const moves = lots.flatMap(l=>(l.movements||[]).filter(m=>m.type==='sown').map(m=>[fmtDT(m.ts), l.lotNo||'-', l.crop+' '+(l.variety||''), m.ref||'-', Math.abs(+m.qty||0).toLocaleString()+' '+l.unit, m.by||'-']));
+    const attn = seedAttention();
+    const t = seedTotals();
+    return { title:'Seeds Inventory Report', subtitle:stamp,
+      sections:[
+        {heading:'Seed lots', head:['Lot No.','Crop / Variety','Supplier','KEPHIS Cert.','Class','Received','Drawn by sowing','On hand','Germ. %','Received on','Expiry','Status'], rows},
+        {heading:'Seed drawn by sowing batches', head:['When','Lot No.','Crop / Variety','Batch','Quantity','By'], rows: moves.length? moves : [['-','-','No sowing has drawn from inventory yet','-','-','-']]},
+      ],
+      summary:[['Seed lots', t.lots], ['Available for sowing', seedLotsAvailable().length], ['Seeds on hand (counted lots)', t.seeds.toLocaleString()], ['Seed by weight', t.grams>=1000? (t.grams/1000).toFixed(2)+' kg' : Math.round(t.grams)+' g'], ['Lots needing attention', attn.length? attn.map(x=>(x.l.lotNo||x.l.crop)+' ('+x.s.label+')').join(', ') : 'none']] };
   }
   if(key==='farm'){
     const plots = DATA.farmPlots||[];
@@ -5773,7 +6642,7 @@ function renderAccess(root){
     <div class="card-title">Pending registrations · ${regs.length} awaiting approval</div>
     ${regs.map(u=>`<div class="queue-row" style="align-items:flex-start;">
       <div style="display:flex;gap:10px;align-items:center;min-width:0;">
-        <div class="role-avatar" style="flex:none;">${initials(u.name)}</div>
+        <div class="role-avatar" style="flex:none;">${avatarInner(u)}</div>
         <div style="min-width:0;"><div style="font-weight:600;">${esc(u.name)} ${st('gold', u.role)}</div>
         <div class="small-muted">${esc(u.designation)}${u.department? ' · '+esc(u.department):''}${u.phone? ' · '+esc(u.phone):''}${u.email? ' · '+esc(u.email):''} · will receive ${(u.access||[]).length} module(s)</div></div>
       </div>
@@ -5796,6 +6665,10 @@ function renderAccess(root){
       <button class="btn sm secondary" style="margin-top:12px;" onclick="openOrgSettings()">Edit organisation & region</button>
       <div class="small-muted" style="margin-top:8px;">The organisation name and region appear in the sidebar, on receipts and on every exported document.</div>
     </div>
+    <div class="card" id="releases-card">
+      <div class="card-title">SPN OS mobile app · Android builds</div>
+      <div id="releases-body" class="small-muted">Loading releases…</div>
+    </div>
     ${isSuper()? `
     <div class="card" style="border-color:var(--danger);">
       <div class="card-title" style="color:var(--danger);">Danger zone · Super User only</div>
@@ -5817,7 +6690,7 @@ function renderAccess(root){
       return ranked.map(({u,c},i)=>`<div class="queue-row">
         <div style="display:flex;align-items:center;gap:10px;min-width:0;flex:1;">
           <span class="mono" style="width:20px;color:var(--faint);">${i+1}</span>
-          <div class="role-avatar" style="flex:none;">${initials(u.name)}</div>
+          <div class="role-avatar" style="flex:none;">${avatarInner(u)}</div>
           <div style="min-width:0;flex:1;">
             <div style="font-weight:600;">${esc(u.name)} <span class="small-muted">· ${esc(u.role)}</span></div>
             <div class="progress-line" style="max-width:220px;margin-top:4px;"><i style="width:${Math.round((c/maxC)*100)}%;"></i></div>
@@ -5833,7 +6706,7 @@ function renderAccess(root){
   <div class="section-title" style="margin-top:0;">Pending access requests<div class="line"></div></div>
   <div class="card" style="margin-bottom:22px;">
     ${pending.length? pending.map(r=>`<div class="queue-row">
-      <div style="font-size:12.6px;"><b style="color:var(--forest-deep);">${esc(r.userName)}</b> requests access to ${st('gold', r.moduleKey)}<div class="small-muted">${fmtDT(r.ts)}</div></div>
+      <div style="font-size:12.6px;"><b style="color:var(--forest-deep);">${esc(r.userName)}</b> requests access to ${st(r.moduleKey==='*'?'rust':'gold', moduleLabel(r.moduleKey))}<div class="small-muted">${fmtDT(r.ts)}</div></div>
       <div style="flex:none;"><button class="btn sm leaf" onclick="decideAccessRequest('${r.id}','Approved')">Approve</button> <button class="btn sm rust" onclick="decideAccessRequest('${r.id}','Denied')">Deny</button></div>
     </div>`).join('') : '<div class="small-muted">No pending requests.</div>'}
   </div>
@@ -5852,6 +6725,7 @@ function renderAccess(root){
   </div></div>
   <div class="disclaimer">Access changes apply immediately and are logged to the Audit Log for traceability. This page is only reachable by Admin/MD or the Super User - everyone else must use "Request Access" from a locked sidebar item.</div>
   `;
+  loadReleasesCard();
   /* pull registrations that arrived after this client loaded its state */
   if(SERVER_MODE && API.token){
     API.req('state').then(st=>{
@@ -5859,7 +6733,7 @@ function renderAccess(root){
       const newcomers = (st.users||[]).filter(u=>!localIds.has(u.id));
       if(newcomers.length){
         DATA.users.push(...stripLegacyDashes(newcomers));
-        SYNC_BASE.__users = JSON.stringify(DATA.users);
+        SYNC_BASE.__users = syncHash(JSON.stringify(DATA.users));
         if(document.querySelector('.sb-item.active')?.dataset.key==='access') renderAccess(root);
       }
     }).catch(()=>{});
@@ -5873,7 +6747,7 @@ function approveRegistration(userId){
   if(!u.access || !u.access.length) u.access = (ROLE_DEFAULT_ACCESS[u.role]||['dashboard']).slice();
   logActivity(`${CURRENT.name} approved the registration of ${u.name} (${u.role}).`);
   saveData();
-  renderAccess(document.getElementById('view-root'));
+  rerenderAccessOrDashboard();
   toast(u.name.split(' ')[0]+' approved - they can now sign in.');
 }
 async function rejectRegistration(userId){
@@ -5884,12 +6758,17 @@ async function rejectRegistration(userId){
   DATA.users = DATA.users.filter(x=>x.id!==userId);
   logActivity(`${CURRENT.name} rejected the registration of ${u.name}.`);
   if(SERVER_MODE && API.token){
-    try{ await API.req('users', {method:'PUT', body:{users:DATA.users, remove:[userId]}}); SYNC_BASE.__users = JSON.stringify(DATA.users); }
+    try{ await API.req('users', {method:'PUT', body:{users:DATA.users, remove:[userId]}}); SYNC_BASE.__users = syncHash(JSON.stringify(DATA.users)); }
     catch(e){ toast('Server update failed: '+(e.message||'error'),'err'); }
   }
   saveData();
-  renderAccess(document.getElementById('view-root'));
+  rerenderAccessOrDashboard();
   toast('Registration rejected.');
+}
+/* approvals can be taken from the Dashboard queue or from Users & Access: redraw whichever is open */
+function rerenderAccessOrDashboard(){
+  const root = document.getElementById('view-root'); const k = root ? root.dataset.view : null;
+  if(k==='access') renderAccess(root); else if(k==='dashboard') renderDashboard(root);
 }
 function copyInviteLink(token){
   const link = location.origin + '/?invite=' + token;
@@ -6005,7 +6884,7 @@ function clearOperationalData(){
   };
   DATA = Object.assign(emptyWorkspace(), keep);
   DATA.auditLog = [{ts:Date.now(), user:CURRENT.name, action:'Cleared all operational data for a fresh production environment.'}];
-  SYNC_BASE = {}; /* force every collection to re-sync its cleared state */
+  markAllDirty(); /* every collection re-syncs its cleared state, also after an offline clear */
   saveData();
   if(SERVER_MODE){ API.req('reset', {method:'POST', body:{mode:'operational'}}).catch(()=>{}); }
   buildSidebar();
@@ -6039,6 +6918,7 @@ function openFactoryResetModal(){
         await API.req('reset', {method:'POST', body:{mode:'factory'}});
         forgetSession();
         try{ localStorage.removeItem(STORE_KEY); }catch(e){}
+        clearLocalSyncState();
         location.reload();
       }catch(e){ toast('Factory reset failed: '+(e.message||'server error'),'err'); }
     }}
@@ -6099,7 +6979,7 @@ function openUserModal(editId){
         try{
           /* sync the user row first so the password can attach to it */
           await API.req('users', {method:'PUT', body:DATA.users});
-          SYNC_BASE.__users = JSON.stringify(DATA.users);
+          SYNC_BASE.__users = syncHash(JSON.stringify(DATA.users));
           if(temp){
             await API.req('users/password', {method:'POST', body:{userId:targetId, password:temp}});
             logActivity(`${CURRENT.name} issued a temporary password for ${name}.`);
@@ -6121,7 +7001,7 @@ function deleteUser(userId){
   logActivity(`${CURRENT.name} deleted user: ${u.name}.`);
   if(SERVER_MODE && API.token){
     API.req('users', {method:'PUT', body:{users:DATA.users, remove:[userId]}})
-      .then(()=>{ SYNC_BASE.__users = JSON.stringify(DATA.users); })
+      .then(()=>{ SYNC_BASE.__users = syncHash(JSON.stringify(DATA.users)); })
       .catch(e=>toast('Server update failed: '+(e.message||'error'),'err'));
   }
   saveData();
@@ -6133,11 +7013,24 @@ function decideAccessRequest(id, decision){
   if(!req) return;
   req.status = decision;
   if(decision==='Approved'){
+    /* requests can only ever grant requestable modules; admin pages and legacy
+       "everything" requests are declined here and assigned in the matrix instead */
+    if(!isRequestable(req.moduleKey)){
+      req.status = 'Declined';
+      saveData();
+      toast('Administration pages cannot be granted through a request. Use the access matrix to assign them deliberately.','err');
+      const ak = document.querySelector('.sb-item.active')?.dataset.key;
+      if(ak==='access') renderAccess(document.getElementById('view-root')); else renderDashboard(document.getElementById('view-root'));
+      return;
+    }
     const u = DATA.users.find(x=>x.id===req.userId);
-    if(u && !u.access.includes(req.moduleKey)) u.access.push(req.moduleKey);
+    if(u){
+      u.access = u.access || [];
+      if(!u.access.includes(req.moduleKey)) u.access.push(req.moduleKey);
+    }
     if(u && CURRENT.id===u.id){ CURRENT.access = u.access; buildSidebar(); }
   }
-  logActivity(`${CURRENT.name} ${decision.toLowerCase()} access request from ${req.userName} for "${req.moduleKey}".`);
+  logActivity(`${CURRENT.name} ${decision.toLowerCase()} access request from ${req.userName} for "${moduleLabel(req.moduleKey)}".`);
   saveData();
   const activeKey = document.querySelector('.sb-item.active')?.dataset.key;
   if(activeKey==='access') renderAccess(document.getElementById('view-root'));
@@ -6205,31 +7098,210 @@ function renderAudit(root){
 /* ================= PROFILE ================= */
 function renderProfile(root){
   root.innerHTML = `
-  <div class="view-header"><div><h2>My Profile</h2></div></div>
+  <div class="view-header"><div><h2>My Profile</h2></div><button class="btn secondary sm" onclick="openEditProfileModal()">Edit profile</button></div>
   <div class="card" style="max-width:440px;">
     <div style="display:flex;gap:14px;align-items:center;margin-bottom:16px;">
-      <div class="role-avatar" style="width:52px;height:52px;font-size:18px;">${initials(CURRENT.name)}</div>
+      ${avatarHTML(CURRENT, 64, 20)}
       <div><div style="font-family:var(--font-display);font-size:18px;font-weight:700;color:var(--forest-deep);">${esc(CURRENT.name)}</div><div class="small-muted">${esc(CURRENT.designation)}</div></div>
     </div>
     ${specList([
       ['Role', st('gold', CURRENT.role)],
       ['Department', CURRENT.department? esc(CURRENT.department) : 'Not assigned'],
-      ['Phone', esc(CURRENT.phone)],
+      ['Phone', CURRENT.phone? esc(CURRENT.phone) : '-'],
       ['Email', CURRENT.email? esc(CURRENT.email) : '-'],
-      ['Modules assigned', `${CURRENT.access.length} of ${ALL_MODULE_KEYS.length}`],
       ['Sign-in', SERVER_MODE? 'Personal password · sessions last 7 days' : 'Standalone demo · shared password <b class="mono">spn2026</b>'],
       ['Activity', `<span class="mono">${activityCount(CURRENT.id)}</span> logged actions`],
       ['Badges', badgeChips(CURRENT.id)],
     ])}
-    ${SERVER_MODE? `<button class="btn sm secondary" style="margin-top:14px;" onclick="openChangePasswordModal(false)">Change password</button>` : ''}
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;">
+      <button class="btn sm leaf" onclick="openEditProfileModal()">Edit profile</button>
+      ${SERVER_MODE? `<button class="btn sm secondary" onclick="openChangePasswordModal(false)">Change password</button>` : ''}
+    </div>
+    ${SPN_CONFIG.mobile? `<div class="small-muted" style="margin-top:14px;">SPN OS app${SPN_CONFIG.appVersion? ' v'+esc(String(SPN_CONFIG.appVersion)) : ''}${OFFLINE? ' · offline' : ''}</div>` : `<div id="profile-app-link"></div>`}
   </div>
+  ${renderNotifPrefsCard()}
   `;
+  loadAppLink('profile-app-link');
+  if(SPN_CONFIG.mobile && window.SPN_MOBILE && SPN_MOBILE.notifPermission){ SPN_MOBILE.notifPermission().then(s=>{ const el=document.getElementById('np-perm'); if(el) el.textContent = s==='granted'? 'Allowed on this phone' : (s==='denied'? 'Blocked in phone settings' : 'Not yet allowed'); }).catch(()=>{}); }
+}
+/* ---- self-service profile: name, phone, email and avatar ---- */
+let profileDraftAvatar = null;
+function openEditProfileModal(){
+  profileDraftAvatar = CURRENT.avatar ? JSON.parse(JSON.stringify(CURRENT.avatar)) : null;
+  openModal('Edit my profile', `
+    <div class="form-grid">
+      <div class="field"><label>Full name <span class="req">*</span></label><input id="pf-name" value="${esc(CURRENT.name)}" autocomplete="name"></div>
+      <div class="field"><label>Phone</label><input id="pf-phone" value="${esc(CURRENT.phone||'')}" placeholder="07XXXXXXXX" autocomplete="tel"></div>
+      <div class="field field-full"><label>Email</label><input id="pf-email" type="email" value="${esc(CURRENT.email||'')}" placeholder="you@example.com" autocomplete="email"></div>
+      <div class="field field-full"><label>Avatar</label>
+        <div style="display:flex;gap:14px;align-items:center;margin-bottom:10px;flex-wrap:wrap;">
+          <div id="pf-avatar-preview">${avatarHTML(Object.assign({}, CURRENT, {avatar:profileDraftAvatar}), 64, 20)}</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <label class="btn sm secondary" style="cursor:pointer;">Upload photo<input type="file" accept="image/*" style="display:none;" onchange="pickProfilePhoto(this.files[0])"></label>
+            <button type="button" class="btn sm ghost" onclick="setProfileAvatar(null)">Use initials</button>
+          </div>
+        </div>
+        <div class="avatar-grid">${Object.entries(AVATAR_PRESETS).map(([k,v])=>`<div class="avatar-opt ${profileDraftAvatar&&profileDraftAvatar.type==='preset'&&profileDraftAvatar.key===k?'on':''}" data-key="${k}" title="${esc(v.label)}" onclick="setProfileAvatar({type:'preset',key:'${k}'})">${v.svg}</div>`).join('')}</div>
+        <small>Pick a nursery avatar, or upload a photo (stored small, about 256 px).</small>
+      </div>
+    </div>
+  `, [
+    {label:'Cancel', cls:'secondary', action:closeModal},
+    {label:'Save profile', cls:'leaf', action:saveProfile},
+  ]);
+}
+function setProfileAvatar(av){
+  profileDraftAvatar = av;
+  const p = document.getElementById('pf-avatar-preview'); if(p) p.innerHTML = avatarHTML(Object.assign({}, CURRENT, {avatar:av}), 64, 20);
+  document.querySelectorAll('.avatar-opt').forEach(el=>el.classList.toggle('on', !!(av && av.type==='preset' && av.key===el.dataset.key)));
+}
+async function pickProfilePhoto(file){
+  if(!file) return;
+  try{
+    const dataUrl = await downscaleImage(file, 256, 0.85);
+    const stored = await storePhoto(dataUrl);
+    setProfileAvatar(Object.assign({type:'photo', src:stored.src, fileId:stored.fileId||null}, stored.pending? {pending:true} : {}));
+  }catch(e){ toast('Could not read that image.','err'); }
+}
+function applyProfile(userId, p){
+  const u = DATA.users.find(x=>x.id===userId);
+  if(u){ u.name = p.name; u.phone = p.phone||''; u.email = p.email||''; u.avatar = p.avatar||null; if(p.prefs && typeof p.prefs==='object') u.prefs = p.prefs; }
+  if(CURRENT && CURRENT.id===userId){
+    if(u) CURRENT = u;
+    const av = document.getElementById('uc-avatar'); if(av) av.innerHTML = avatarInner(CURRENT);
+    const nm = document.getElementById('uc-name'); if(nm) nm.textContent = CURRENT.name;
+  }
+}
+async function saveProfile(){
+  const name = (document.getElementById('pf-name').value||'').trim();
+  if(!name){ toast('Your name is required.','err'); return; }
+  const email = (document.getElementById('pf-email').value||'').trim();
+  if(email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){ toast('That email address does not look right.','err'); return; }
+  const phone = (document.getElementById('pf-phone').value||'').trim();
+  const payload = {name, phone, email, avatar: profileDraftAvatar, prefs: CURRENT.prefs || undefined};
+  applyProfile(CURRENT.id, payload);
+  closeModal();
+  logActivity(`${name} updated their profile.`); saveData();
+  await pushProfile(payload);
+  if(document.getElementById('view-root').dataset.view==='profile') renderProfile(document.getElementById('view-root'));
+  toast('Profile updated.');
+}
+/* the profile goes through its own route so every user (not only admins) can save
+   it; offline it waits on the device and is pushed on reconnect */
+const PENDING_PROFILE_KEY = 'spn_pending_profile';
+function pendingProfileCount(){ try{ return localStorage.getItem(PENDING_PROFILE_KEY)? 1 : 0; }catch(e){ return 0; } }
+function queueProfile(p){ try{ localStorage.setItem(PENDING_PROFILE_KEY, JSON.stringify(p)); }catch(e){} updateOfflineChip(); }
+async function pushProfile(p){
+  if(!SERVER_MODE) return;
+  if(OFFLINE || SESSION_EXPIRED || !API.token){ queueProfile(p); return; }
+  try{
+    queueProfile(p);
+    await flushPendingProfile();
+  }catch(e){
+    if(isNetworkError(e)) goOffline();
+    else if(e.status===401) sessionExpired();
+    else { toast('Profile saved on this device, but the server rejected it: '+e.message,'err'); try{ localStorage.removeItem(PENDING_PROFILE_KEY); }catch(e2){} }
+  }
+}
+async function flushPendingProfile(){
+  let p = null; try{ p = JSON.parse(localStorage.getItem(PENDING_PROFILE_KEY)||'null'); }catch(e){}
+  if(!p || !SERVER_MODE || !API.token) return;
+  if(p.avatar && p.avatar.type==='photo' && String(p.avatar.src||'').startsWith('data:')){
+    const res = await API.req('files', {method:'POST', body:{mime:'image/jpeg', data:p.avatar.src.split(',')[1]}});
+    p.avatar = {type:'photo', src:'/api/files/'+res.id, fileId:res.id};
+  }
+  const res = await API.req('profile', {method:'POST', body:p});
+  if(res && res.user) applyProfile(res.user.id, res.user);
+  try{ localStorage.removeItem(PENDING_PROFILE_KEY); }catch(e){}
+  updateOfflineChip();
+}
+
+/* ================= SPN OS app releases (Android APK on R2) ================= */
+function fmtBytes(n){ n=+n||0; if(n<1024) return n+' B'; if(n<1048576) return (n/1024).toFixed(0)+' KB'; return (n/1048576).toFixed(1)+' MB'; }
+/* every build is named the same way everywhere: SPN-OS-v1.2.3.apk */
+function apkFileName(version, platform){ return 'SPN-OS-v'+String(version||'').trim().replace(/^v/i,'').replace(/[^0-9A-Za-z.-]+/g,'_')+(platform==='ios'?'.ipa':'.apk'); }
+let RELEASES_CACHE = null;
+async function fetchReleases(force){
+  if(RELEASES_CACHE && !force) return RELEASES_CACHE;
+  const r = await API.req('releases');
+  RELEASES_CACHE = r || {releases:[]};
+  return RELEASES_CACHE;
+}
+/* "Get the app" link for the login page and the profile page (web only) */
+async function loadAppLink(elId){
+  const el = document.getElementById(elId); if(!el) return;
+  if(!SERVER_MODE || OFFLINE || SPN_CONFIG.mobile){ el.innerHTML=''; return; }
+  try{
+    const r = await fetchReleases();
+    const latest = (r.releases||[]).find(x=>x.platform!=='ios') || null;
+    const node = document.getElementById(elId); if(!node) return;
+    node.innerHTML = latest? `<div class="app-link">📱 <b>SPN OS for Android</b> v${esc(latest.version)} · ${fmtBytes(latest.size)} <a href="${esc(apiUrl('releases/'+latest.id+'/download'))}" download="${esc(apkFileName(latest.version))}">Download APK</a><span class="small-muted">Works offline; syncs with this workspace.</span></div>` : '';
+  }catch(e){ el.innerHTML=''; }
+}
+/* Users & Access card: everyone with access sees the builds; only the Super User uploads */
+async function loadReleasesCard(){
+  const el = document.getElementById('releases-body'); if(!el) return;
+  if(!SERVER_MODE){ el.innerHTML = '<span class="small-muted">App releases are managed on the deployed (Cloudflare) workspace.</span>'; return; }
+  let rel=[], storage='none';
+  try{ const r = await fetchReleases(true); rel = r.releases||[]; storage = r.storage||'none'; }
+  catch(e){ if(document.getElementById('releases-body')) document.getElementById('releases-body').innerHTML = '<span class="small-muted">Could not load releases'+(OFFLINE?' (offline)':'')+'.</span>'; return; }
+  const body = document.getElementById('releases-body'); if(!body) return;
+  body.innerHTML = `
+    ${isSuper()? `<div class="form-grid c3" style="margin-bottom:8px;">
+        <div class="field"><label>APK file</label><input type="file" id="rel-file" accept=".apk,application/vnd.android.package-archive"></div>
+        <div class="field"><label>Version <span class="req">*</span></label><input id="rel-version" placeholder="e.g. 1.0.0"></div>
+        <div class="field"><label>Release notes</label><input id="rel-notes" placeholder="What changed in this build"></div>
+      </div>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px;">
+        <button class="btn sm leaf" id="rel-upload-btn" onclick="uploadRelease()">Upload APK</button>
+        <span class="small-muted">Only the Super User can upload. The newest 5 builds are kept; older ones are deleted automatically.${storage!=='r2'? ' <b style="color:var(--danger);">R2 storage is not configured on this deployment</b> (bind SPN_FILES in wrangler.jsonc).':''}</span>
+      </div>` : ''}
+    ${rel.length? rel.map((r,i)=>`<div class="release-row">
+        <b>v${esc(r.version)}</b> ${i===0? st('green','Current'):st('slate','Previous')} ${r.platform==='ios'? st('slate','iOS'):''}
+        <span class="small-muted">${fmtBytes(r.size)} · ${esc(new Date(r.createdAt).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}))}</span>
+        <span class="small-muted" style="flex:1;min-width:120px;">${esc(r.notes||'')}</span>
+        <a class="btn sm secondary" href="${esc(apiUrl('releases/'+r.id+'/download'))}" download="${esc(apkFileName(r.version, r.platform))}">Download</a>
+        ${isSuper()? `<button class="btn sm ghost" onclick="deleteRelease('${esc(r.id)}')">Delete</button>`:''}
+      </div>`).join('') : '<div class="small-muted">No app build uploaded yet.</div>'}
+    <div class="small-muted" style="margin-top:10px;">The login page shows the current build to everyone. Android asks once to allow installs from this source.</div>`;
+}
+async function uploadRelease(){
+  if(!isSuper()){ toast('Only the Super User can upload app builds.','err'); return; }
+  const f = (document.getElementById('rel-file')||{}).files; const file = f && f[0];
+  const version = (document.getElementById('rel-version')||{}).value; const notes = (document.getElementById('rel-notes')||{}).value;
+  if(!file){ toast('Choose the APK file first.','err'); return; }
+  if(!/\.apk$/i.test(file.name)){ toast('Only .apk files can be uploaded here.','err'); return; }
+  const v = String(version||'').trim().replace(/^v/i,'');
+  if(!v){ toast('Enter the version number (e.g. 1.0.0).','err'); return; }
+  const btn = document.getElementById('rel-upload-btn'); if(btn){ btn.disabled=true; btn.textContent='Uploading…'; }
+  toast('Uploading '+fmtBytes(file.size)+'…');
+  try{
+    const res = await API.upload('releases', file, {
+      'Content-Type':'application/vnd.android.package-archive',
+      'X-Release-Version': v,
+      'X-Release-Notes': encodeURIComponent(String(notes||'').trim()),
+      'X-File-Name': apkFileName(v),
+    });
+    logActivity(`Uploaded SPN OS Android release v${v}.`); saveData();
+    toast('Release v'+v+' uploaded'+(res && res.purged? ' · '+res.purged+' old build'+(res.purged===1?'':'s')+' removed':'')+'.');
+    RELEASES_CACHE = null; loadReleasesCard();
+  }catch(e){ toast('Upload failed: '+e.message,'err'); if(btn){ btn.disabled=false; btn.textContent='Upload APK'; } }
+}
+async function deleteRelease(id){
+  if(!isSuper()) return;
+  if(!confirm('Delete this app build? Devices that already installed it are not affected.')) return;
+  try{ await API.req('releases/'+id, {method:'DELETE'}); logActivity('Deleted an SPN OS app build.'); saveData(); toast('Release deleted.'); RELEASES_CACHE = null; loadReleasesCard(); }
+  catch(e){ toast('Could not delete: '+e.message,'err'); }
 }
 
 /* ================= INIT ================= */
 (async function init(){
   await loadData();
+  loadSyncBase();
+  await loadSyncSnapshot();
+  PENDING_LOCAL = hasLocalUnsynced();
   await detectServer();
+  if(SERVER_MODE && OFFLINE){ await bootOffline(); return; }
   if(SERVER_MODE){
     try{
       const d = await API.req('directory');
@@ -6253,15 +7325,50 @@ function renderProfile(root){
       const savedUid = (()=>{ try{ return localStorage.getItem('spn_uid'); }catch(e){ return null; } })();
       if(savedUid){
         try{
+          if(hasLocalUnsynced()){
+            const me = DATA.users.find(u=>u.id===savedUid);
+            try{ await pushLocalChanges(me); }
+            catch(e){
+              if(isNetworkError(e) || (e && e.status===401)) throw e;
+              /* the push could not complete: keep the local copy, retry later */
+              if(me){ login(savedUid, true); scheduleRetry(); toast('Some changes made offline could not be synced yet - they stay on this device and will be retried.','err'); return; }
+            }
+          }
           await loadServerState();
           if(DATA.users.some(u=>u.id===savedUid)){ login(savedUid, true); return; }
           forgetSession();
-        }catch(e){ forgetSession(); }
+        }catch(e){
+          if(isNetworkError(e)){ OFFLINE = true; await bootOffline(); return; }
+          forgetSession(); /* expired session: the sync state stays, the next sign-in pushes */
+        }
       }
     }
   }
   renderLogin();
 })();
+/* Offline start: the server is known but unreachable. A device that signed in
+   before opens its last synced workspace straight away; otherwise the login screen
+   explains that signing in needs a connection. */
+async function bootOffline(){
+  SERVER_SETUP = true;
+  let cached = false;
+  try{ cached = !!(await store.get(STORE_KEY)); }catch(e){}
+  /* a cached collection that still matches its synced hash IS the last synced
+     state: use it as the merge base if the snapshot is missing (older builds) */
+  if(cached && DATA){ COLLECTION_KEYS.forEach(k=>{ if(SYNC_SNAPSHOT[k]==null && SYNC_BASE[k]){ const j = JSON.stringify(DATA[k]); if(SYNC_BASE[k]===syncHash(j)){ SYNC_SNAPSHOT[k] = j; store.set(snapKey(k), j); } } }); }
+  const savedUid = (()=>{ try{ return localStorage.getItem('spn_uid'); }catch(e){ return null; } })();
+  if(cached && API.token && savedUid && DATA && Array.isArray(DATA.users) && DATA.users.some(u=>u.id===savedUid)){
+    login(savedUid, true);
+    updateOfflineChip();
+    toast('You are offline - showing the last synced workspace. Changes will sync when you reconnect.');
+    scheduleReconnect(8000);
+    return;
+  }
+  if(!cached) DATA = emptyWorkspace();
+  LOGIN_DIRECTORY = (DATA && Array.isArray(DATA.users)) ? DATA.users.map(u=>({id:u.id, name:u.name, role:u.role, designation:u.designation, status:u.status||'Active', hasPassword:true})) : [];
+  renderLogin();
+  scheduleReconnect(8000);
+}
 </script>
 </body>
 </html>

@@ -30,8 +30,18 @@
 	//   3) npx wrangler deploy
 	// Until EMAIL_FROM is set, invitations fall back to a shareable link.
 	"send_email": [{ "name": "SPN_EMAIL" }],
+	// Binary files (livestock photos, Android APK releases) live in R2:
+	//   npx wrangler r2 bucket create spn-erp-files
+	// The binding name SPN_FILES must stay as is. Without the bucket the Worker
+	// still runs: images fall back to D1 and APK uploads report "not configured".
+	"r2_buckets": [
+		{ "binding": "SPN_FILES", "bucket_name": "spn-erp-files" }
+	],
 	"vars": {
 		"EMAIL_FROM": "",
-		"EMAIL_FROM_NAME": ""
+		"EMAIL_FROM_NAME": "",
+		// Extra origins allowed to call the API cross-origin (comma separated), e.g.
+		// a custom scheme for the mobile app. Capacitor defaults are always allowed.
+		"ALLOWED_ORIGINS": ""
 	}
 }

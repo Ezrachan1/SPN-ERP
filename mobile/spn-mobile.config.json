@@ -1,0 +1,5 @@
+{
+  "_comment": "Build-time settings for the SPN OS app. apiBase is the deployed Worker URL the app talks to; override with the SPN_API_BASE environment variable. appVersion defaults to package.json's version.",
+  "apiBase": "https://spn-erp.ujuzistack.workers.dev",
+  "source": "../app/public/index.html"
+}

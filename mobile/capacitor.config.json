@@ -1,0 +1,24 @@
+{
+  "appId": "com.spn.os",
+  "appName": "SPN OS",
+  "webDir": "www",
+  "server": {
+    "androidScheme": "https"
+  },
+  "android": {
+    "allowMixedContent": false,
+    "backgroundColor": "#1E2B22",
+    "webContentsDebuggingEnabled": false
+  },
+  "plugins": {
+    "StatusBar": {
+      "style": "DARK",
+      "backgroundColor": "#1E2B22",
+      "overlaysWebView": false
+    },
+    "LocalNotifications": {
+      "smallIcon": "ic_stat_spn",
+      "iconColor": "#2E5B3A"
+    }
+  }
+}
