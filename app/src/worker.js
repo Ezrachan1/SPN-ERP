@@ -14,15 +14,24 @@
  *   POST /api/logout              end the current session
  *   POST /api/password            change own password { current, next }
  *   POST /api/profile             change own name / phone / email / avatar
- *   POST /api/users/password      admin: set a temporary password { userId, password }
+ *   POST /api/users/password      superuser: set a temporary password { userId, password }
+ *   GET  /api/users/:id/account   superuser: one account plus its sign-in state
+ *                                 (password set? forced change? live sessions?)
+ *   PUT  /api/users/:id           superuser: merge patch on one account (name,
+ *                                 phone, email, department, designation, role,
+ *                                 status, avatar, module access)
+ *   POST /api/users/:id/security  superuser: { action: 'password' | 'clear-password'
+ *                                 | 'require-change' | 'revoke-sessions' }
+ *   DELETE /api/users/:id         superuser: delete one account and its sessions
  *   POST /api/invites             admin: create an invitation { role } -> { token }
  *   GET  /api/invites             admin: list invitations
  *   DELETE /api/invites/:token    admin: revoke an invitation
  *   GET  /api/state               full workspace (users + all collections)
  *   PUT  /api/collections/:name   upsert one collection (granular sync)
- *   PUT  /api/users               admin: upsert user list; deletions only via
- *                                 an explicit { users, remove: [ids] } body, so a
- *                                 stale client can never wipe a fresh registration
+ *   PUT  /api/users               admin: upsert user list, merged field by field over
+ *                                 the stored profile; deletions only via an explicit
+ *                                 { users, remove: [ids] } body, so a stale client
+ *                                 can never wipe a fresh registration
  *   POST /api/reset               superuser: { mode: 'operational' | 'factory' }
  *   POST /api/ai                  proxy to the Anthropic Messages API (needs
  *                                 the ANTHROPIC_API_KEY secret)
@@ -43,8 +52,10 @@
  * Auth: per-user PBKDF2-SHA256 hashes with a versioned cost (v1$<iterations>$<hash>).
  * The default of 10k iterations stays inside the Workers free-plan CPU budget;
  * legacy 100k-iteration hashes verify once and are transparently rehashed.
- * Sessions are bearer tokens in the sessions table with a 7 day expiry.
- * Accounts are permanent until deleted by an admin or a factory reset.
+ * Sessions are bearer tokens in the sessions table with a 7 day expiry; only an
+ * Active account may sign in or hold one, and suspending an account deletes its
+ * sessions while requireSession refuses any that survive.
+ * Accounts are permanent until deleted by the Super User or a factory reset.
  */
 const JSON_HEADERS = { 'Content-Type': 'application/json' };
 const json = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: JSON_HEADERS });
@@ -108,14 +119,14 @@ const PBKDF2_ITERATIONS = 10000;
 const LEGACY_ITERATIONS = 100000;
 
 const COLLECTIONS = [
-  'departments', 'staff', 'consumables', 'seedlingStock', 'seedInventory', 'livestockInventory',
+  'departments', 'staff', 'consumables', 'seedlingStock', 'seedInventory', 'priceList', 'suppliers', 'livestockInventory',
   'farmPlots', 'rainfallLog', 'reportAccess',
   'sowingRecords', 'cashSales', 'procurement', 'requisitions', 'leads', 'auditLog',
   'reportsAccessList', 'accessRequests', 'aiScans', 'activityStats', 'weatherLocation',
   'salesHistory', 'priceHistory', 'companyKraPin', 'leadsMonthlyTarget', 'org',
 ];
 const OPERATIONAL = [
-  'staff', 'consumables', 'seedlingStock', 'seedInventory', 'livestockInventory', 'farmPlots', 'rainfallLog',
+  'staff', 'consumables', 'seedlingStock', 'seedInventory', 'priceList', 'suppliers', 'livestockInventory', 'farmPlots', 'rainfallLog',
   'sowingRecords', 'cashSales', 'procurement', 'requisitions', 'leads', 'auditLog',
   'accessRequests', 'aiScans', 'activityStats', 'salesHistory', 'priceHistory',
 ];
@@ -124,15 +135,19 @@ let schemaReady = false;
 async function ensureSchema(env) {
   if (schemaReady) return;
   await env.SPN_DB.batch([
-    env.SPN_DB.prepare('CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, json TEXT NOT NULL, pass_hash TEXT, pass_salt TEXT, must_change INTEGER DEFAULT 0, updated_at INTEGER)'),
+    env.SPN_DB.prepare('CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, json TEXT NOT NULL, pass_hash TEXT, pass_salt TEXT, must_change INTEGER DEFAULT 0, updated_at INTEGER, last_login INTEGER)'),
     env.SPN_DB.prepare('CREATE TABLE IF NOT EXISTS collections (name TEXT PRIMARY KEY, json TEXT NOT NULL, updated_at INTEGER)'),
-    env.SPN_DB.prepare('CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, user_id TEXT NOT NULL, expires_at INTEGER NOT NULL)'),
+    env.SPN_DB.prepare('CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, user_id TEXT NOT NULL, expires_at INTEGER NOT NULL, created_at INTEGER)'),
     env.SPN_DB.prepare('CREATE TABLE IF NOT EXISTS invites (token TEXT PRIMARY KEY, role TEXT, created_by TEXT, created_at INTEGER, expires_at INTEGER, used_by TEXT)'),
     env.SPN_DB.prepare('CREATE TABLE IF NOT EXISTS files (id TEXT PRIMARY KEY, owner TEXT, mime TEXT, data TEXT NOT NULL, size INTEGER, created_at INTEGER)'),
     env.SPN_DB.prepare('CREATE TABLE IF NOT EXISTS releases (id TEXT PRIMARY KEY, version TEXT NOT NULL, notes TEXT, file_name TEXT, r2_key TEXT NOT NULL, size INTEGER, platform TEXT, created_at INTEGER, created_by TEXT)'),
   ]);
   /* migration: invites gained an email column for emailed invitations */
   try { await env.SPN_DB.prepare('ALTER TABLE invites ADD COLUMN email TEXT').run(); } catch (e) {}
+  /* migration: users gained last_login so the Super User can spot a dormant account */
+  try { await env.SPN_DB.prepare('ALTER TABLE users ADD COLUMN last_login INTEGER').run(); } catch (e) {}
+  /* migration: sessions gained created_at so a live session can be dated */
+  try { await env.SPN_DB.prepare('ALTER TABLE sessions ADD COLUMN created_at INTEGER').run(); } catch (e) {}
   schemaReady = true;
 }
 
@@ -202,16 +217,99 @@ async function requireSession(req, env) {
     await env.SPN_DB.prepare('DELETE FROM sessions WHERE token = ?').bind(token).run();
     return null;
   }
-  return { token, userId: row.user_id, user: JSON.parse(row.user_json) };
+  const user = JSON.parse(row.user_json);
+  /* status is re-read on every request: suspending an account has to end it now,
+     not in seven days when the bearer token happens to expire */
+  if (statusOf(user) !== 'Active') {
+    await env.SPN_DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(row.user_id).run();
+    return null;
+  }
+  return { token, userId: row.user_id, user };
 }
 const isAdmin = u => u && (u.role === 'Admin' || u.role === 'SuperUser');
 
+/* ---- account vocabulary and guardrails ----
+   An id is client-chosen at registration and is interpolated into an onclick in
+   the SPA, so it is validated at every ingress rather than escaped at every use. */
+const USER_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+const ROLES = ['Admin', 'SuperUser', 'HOD', 'HR', 'Finance', 'Sales', 'Agronomist', 'Procurement', 'Casual', 'Marketing'];
+const STATUSES = ['Active', 'Pending', 'Suspended'];
+const MODULE_KEY_RE = /^[a-z0-9]{1,32}$/;
+/* absent status always means Active: the seeded accounts carry no status key */
+const statusOf = u => (u && u.status) || 'Active';
+/* How many active Super Users the workspace would have if `changes` were written and
+   `removeIds` deleted. Zero is unrecoverable: issuing passwords, backups, restores
+   and resets are all Super-User-only, and /api/setup refuses to run once any user
+   exists, so there is no way back in through the front door. */
+async function superUserCount(env, changes, removeIds) {
+  const rows = (await env.SPN_DB.prepare('SELECT id, json FROM users').all()).results || [];
+  const rm = new Set((removeIds || []).map(String));
+  const patch = new Map();
+  (changes || []).forEach(u => { if (u && u.id) patch.set(String(u.id), u); });
+  let n = 0;
+  rows.forEach(r => {
+    if (rm.has(r.id)) { patch.delete(r.id); return; }
+    let u; try { u = JSON.parse(r.json); } catch (e) { return; }
+    const p = patch.get(r.id);
+    const role = p && p.role !== undefined ? p.role : u.role;
+    const status = p && p.status !== undefined ? p.status : statusOf(u);
+    if (role === 'SuperUser' && status === 'Active') n++;
+    patch.delete(r.id);
+  });
+  /* whatever is left in `patch` is a row that does not exist yet */
+  patch.forEach(u => { if (u.role === 'SuperUser' && statusOf(u) === 'Active') n++; });
+  return n;
+}
+/* Whitelist and validate one account patch. Returns { error } or { patch } holding
+   only the keys that were actually present, so a caller can send a partial update. */
+function sanitiseUserPatch(body) {
+  const out = {};
+  if (!body || typeof body !== 'object') return { error: 'Nothing to update' };
+  if (body.name !== undefined) {
+    const name = String(body.name).trim().slice(0, 80);
+    if (!name) return { error: 'Full name is required' };
+    out.name = name;
+  }
+  if (body.email !== undefined) {
+    const email = String(body.email).trim().slice(0, 120);
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { error: 'That email address does not look right' };
+    out.email = email;
+  }
+  if (body.phone !== undefined) out.phone = String(body.phone).trim().slice(0, 30);
+  if (body.department !== undefined) out.department = String(body.department).trim().slice(0, 60);
+  if (body.designation !== undefined) out.designation = String(body.designation).trim().slice(0, 60);
+  if (body.role !== undefined) { if (!ROLES.includes(body.role)) return { error: 'Unknown role' }; out.role = body.role; }
+  if (body.status !== undefined) { if (!STATUSES.includes(body.status)) return { error: 'Unknown status' }; out.status = body.status; }
+  if (body.avatar !== undefined) {
+    const av = body.avatar;
+    if (av === null) out.avatar = null;
+    else if (av && av.type === 'preset' && /^[a-z0-9_-]{1,30}$/.test(String(av.key || ''))) out.avatar = { type: 'preset', key: String(av.key) };
+    else if (av && av.type === 'photo' && /^\/api\/files\/[a-zA-Z0-9]+$/.test(String(av.src || ''))) out.avatar = { type: 'photo', src: String(av.src), fileId: String(av.src).split('/').pop() };
+    else return { error: 'Invalid avatar' };
+  }
+  if (body.access !== undefined) {
+    if (!Array.isArray(body.access)) return { error: 'Module access must be a list' };
+    const keys = [...new Set(body.access.map(String))].filter(k => MODULE_KEY_RE.test(k)).slice(0, 60);
+    if (!keys.length) return { error: 'An account needs at least one module' };
+    out.access = keys;
+  }
+  if (!Object.keys(out).length) return { error: 'Nothing to update' };
+  return { patch: out };
+}
+
 async function createSession(env, userId) {
   const token = crypto.randomUUID() + '-' + crypto.randomUUID();
-  await env.SPN_DB.prepare('INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)')
-    .bind(token, userId, Date.now() + SESSION_TTL_MS).run();
+  await env.SPN_DB.prepare('INSERT INTO sessions (token, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)')
+    .bind(token, userId, Date.now() + SESSION_TTL_MS, Date.now()).run();
   await env.SPN_DB.prepare('DELETE FROM sessions WHERE expires_at < ?').bind(Date.now()).run();
   return token;
+}
+async function buildBackupDump(env) {
+  const users = ((await env.SPN_DB.prepare('SELECT json FROM users').all()).results || []).map(r => JSON.parse(r.json));
+  const rows = (await env.SPN_DB.prepare('SELECT name, json FROM collections').all()).results || [];
+  const collections = {};
+  for (const r of rows) { try { collections[r.name] = JSON.parse(r.json); } catch (e) {} }
+  return { kind: 'spn-erp-backup', version: 2, exportedAt: new Date().toISOString(), users, collections };
 }
 async function putCollection(env, name, jsonText) {
   await env.SPN_DB.prepare(
@@ -243,16 +341,21 @@ async function handleApi(req, env, url) {
       }
 
       if (route === 'directory') {
-        const rows = (await env.SPN_DB.prepare('SELECT json, pass_hash FROM users').all()).results || [];
-        const users = rows.map(r => {
-          const u = JSON.parse(r.json);
-          return { id: u.id, name: u.name, role: u.role, designation: u.designation, status: u.status || 'Active', hasPassword: !!r.pass_hash };
-        });
+        /* this route is unauthenticated: it feeds the sign-in picker and nothing more.
+           It deliberately does not say which accounts have no password (that is a map
+           of unclaimed accounts) and does not list suspended ones. The Super User
+           reads the real state from /api/users/:id/account, behind a 403. */
+        const rows = (await env.SPN_DB.prepare('SELECT json FROM users').all()).results || [];
+        const users = rows.map(r => JSON.parse(r.json))
+          .filter(u => statusOf(u) !== 'Suspended')
+          .map(u => ({ id: u.id, name: u.name, role: u.role, designation: u.designation, status: statusOf(u) }));
         const orgRow = await env.SPN_DB.prepare('SELECT json FROM collections WHERE name = ?').bind('org').first();
         const deptRow = await env.SPN_DB.prepare('SELECT json FROM collections WHERE name = ?').bind('departments').first();
         let departments = [];
         if (deptRow) { try { departments = JSON.parse(deptRow.json) || []; } catch (e) {} }
-        return json({ setup: users.length > 0, users, org: orgRow ? JSON.parse(orgRow.json) : null, departments });
+        /* setup counts every row, not the filtered list: a workspace whose accounts
+           are all suspended is still set up and must not fall back to first-run */
+        return json({ setup: rows.length > 0, users, org: orgRow ? JSON.parse(orgRow.json) : null, departments });
       }
 
       if (route === 'setup' && req.method === 'POST') {
@@ -260,8 +363,8 @@ async function handleApi(req, env, url) {
         const body = await req.json().catch(() => ({}));
         const user = body.user;
         const password = String(body.password || '');
-        if (!user || !user.id || !user.name || password.length < 8) {
-          return json({ error: 'A Super User profile and a password of at least 8 characters are required' }, 400);
+        if (!user || !USER_ID_RE.test(String(user.id || '')) || !user.name || password.length < 8) {
+          return json({ error: 'A Super User profile with a valid account id and a password of at least 8 characters are required' }, 400);
         }
         user.role = 'SuperUser';
         user.status = 'Active';
@@ -278,9 +381,12 @@ async function handleApi(req, env, url) {
         const body = await req.json().catch(() => ({}));
         const user = body.user;
         const password = String(body.password || '');
-        if (!user || !user.id || !user.name || !user.role || password.length < 8) {
-          return json({ error: 'Name, role and a password of at least 8 characters are required' }, 400);
+        /* the id is client-chosen and ends up inside an onclick attribute in the SPA:
+           it must be plain text before it is ever stored */
+        if (!user || !USER_ID_RE.test(String(user.id || '')) || !user.name || !user.role || password.length < 8) {
+          return json({ error: 'Name, role, a valid account id and a password of at least 8 characters are required' }, 400);
         }
+        if (!ROLES.includes(user.role)) return json({ error: 'Unknown role' }, 400);
         if (user.role === 'SuperUser') return json({ error: 'The Super User account cannot be self-registered' }, 403);
         const rows = (await env.SPN_DB.prepare('SELECT json FROM users').all()).results || [];
         const dup = rows.some(r => { try { return JSON.parse(r.json).name.trim().toLowerCase() === user.name.trim().toLowerCase(); } catch (e) { return false; } });
@@ -297,6 +403,9 @@ async function handleApi(req, env, url) {
           await env.SPN_DB.prepare('UPDATE invites SET used_by = ? WHERE token = ?').bind(user.id, inviteToken).run();
         }
         user.status = active ? 'Active' : 'Pending';
+        /* a self-registrant does not choose their own module access: an approval is
+           a click, and whatever was submitted here would go live with it */
+        if (!active) user.access = [];
         const { hash, salt } = await makePassword(password);
         await env.SPN_DB.prepare('INSERT INTO users (id, json, pass_hash, pass_salt, must_change, updated_at) VALUES (?, ?, ?, ?, 0, ?)')
           .bind(user.id, JSON.stringify(user), hash, salt, Date.now()).run();
@@ -361,8 +470,12 @@ async function handleApi(req, env, url) {
         if (!row.pass_hash) return json({ error: 'No password is set for this account yet. Ask your administrator to issue a temporary password.', code: 'no-password' }, 403);
         const v = await verifyPassword(password, row.pass_hash, row.pass_salt);
         if (!v.ok) return json({ error: 'Incorrect password' }, 401);
-        if ((profile.status || 'Active') === 'Pending') {
-          return json({ error: 'Your registration is awaiting approval by an administrator.', code: 'pending' }, 403);
+        /* an allowlist, never a denylist: a status this build does not recognise
+           must fail closed rather than sign someone in */
+        if (statusOf(profile) !== 'Active') {
+          return json(statusOf(profile) === 'Pending'
+            ? { error: 'Your registration is awaiting approval by an administrator.', code: 'pending' }
+            : { error: 'This account has been suspended. Ask the Super User to reactivate it.', code: 'suspended' }, 403);
         }
         if (v.legacy) {
           /* migrate old high-cost hashes to the versioned format */
@@ -370,6 +483,7 @@ async function handleApi(req, env, url) {
           await env.SPN_DB.prepare('UPDATE users SET pass_hash = ?, pass_salt = ? WHERE id = ?').bind(np.hash, np.salt, row.id).run();
         }
         const token = await createSession(env, userId);
+        await env.SPN_DB.prepare('UPDATE users SET last_login = ? WHERE id = ?').bind(Date.now(), userId).run();
         return json({ token, userId, mustChange: !!row.must_change });
       }
 
@@ -429,7 +543,7 @@ async function handleApi(req, env, url) {
       }
 
       if (route === 'users/password' && req.method === 'POST') {
-        if (!isAdmin(session.user)) return json({ error: 'Admin or Super User required' }, 403);
+        if (session.user.role !== 'SuperUser') return json({ error: 'Super User required' }, 403);
         const body = await req.json().catch(() => ({}));
         const userId = String(body.userId || '');
         const password = String(body.password || '');
@@ -440,6 +554,148 @@ async function handleApi(req, env, url) {
         await env.SPN_DB.prepare('UPDATE users SET pass_hash = ?, pass_salt = ?, must_change = 1, updated_at = ? WHERE id = ?')
           .bind(hash, salt, Date.now(), userId).run();
         return json({ ok: true });
+      }
+
+      /* ---- Super User account management (view · edit · sign-in & security) ----
+         One account at a time, and the only place password state, live sessions and
+         account deletion can be reached. The bulk PUT /api/users above is the sync
+         channel; these are the deliberate edits. Security state deliberately never
+         appears on /api/directory (public) or /api/state (every signed-in user).
+         Every matcher is an anchored regex, so a malformed id cannot even route. */
+
+      if (/^users\/[A-Za-z0-9_-]{1,64}\/account$/.test(route) && req.method === 'GET') {
+        if (session.user.role !== 'SuperUser') return json({ error: 'Super User required' }, 403);
+        const id = route.split('/')[1];
+        const row = await env.SPN_DB.prepare('SELECT id, json, pass_hash, must_change, updated_at, last_login FROM users WHERE id = ?').bind(id).first();
+        if (!row) return json({ error: 'Unknown user' }, 404);
+        const now = Date.now();
+        const s = await env.SPN_DB.prepare('SELECT COUNT(*) AS n, MAX(expires_at) AS newest, MIN(created_at) AS oldest FROM sessions WHERE user_id = ? AND expires_at >= ?').bind(id, now).first();
+        const user = JSON.parse(row.json);
+        const supers = await superUserCount(env, [], []);
+        return json({
+          ok: true,
+          user,
+          security: {
+            hasPassword: !!row.pass_hash,
+            mustChange: !!row.must_change,
+            updatedAt: row.updated_at || null,
+            lastLogin: row.last_login || null,
+            sessionCount: (s && s.n) || 0,
+            sessionNewestExpiry: (s && s.newest) || null,
+            sessionOldestStart: (s && s.oldest) || null,
+            isSelf: id === session.userId,
+            superUserCount: supers,
+            lastSuperUser: user.role === 'SuperUser' && statusOf(user) === 'Active' && supers <= 1,
+          },
+        });
+      }
+
+      if (/^users\/[A-Za-z0-9_-]{1,64}$/.test(route) && req.method === 'PUT') {
+        if (session.user.role !== 'SuperUser') return json({ error: 'Super User required' }, 403);
+        const id = route.slice('users/'.length);
+        const row = await env.SPN_DB.prepare('SELECT json FROM users WHERE id = ?').bind(id).first();
+        if (!row) return json({ error: 'Unknown user' }, 404);
+        const clean = sanitiseUserPatch(await req.json().catch(() => ({})));
+        if (clean.error) return json({ error: clean.error }, 400);
+        const stored = JSON.parse(row.json);
+        /* self-protection: nobody demotes or suspends the account they are using, so
+           one careless click can never lock the workspace out of its own admin */
+        if (id === session.userId) {
+          if (clean.patch.role !== undefined && clean.patch.role !== stored.role) return json({ error: 'Sign in from another Super User account to change your own role' }, 400);
+          if (clean.patch.status !== undefined && clean.patch.status !== statusOf(stored)) return json({ error: 'Sign in from another Super User account to change your own status' }, 400);
+        }
+        /* merge, never replace: a field the client did not send keeps its value */
+        const merged = Object.assign({}, stored, clean.patch, { id });
+        if ((await superUserCount(env, [merged], [])) < 1) return json({ error: 'The workspace must keep at least one active Super User' }, 400);
+        const now = Date.now();
+        const stmts = [env.SPN_DB.prepare('UPDATE users SET json = ?, updated_at = ? WHERE id = ?').bind(JSON.stringify(merged), now, id)];
+        /* suspending signs the account out of every device straight away */
+        if (statusOf(merged) !== 'Active') stmts.push(env.SPN_DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(id));
+        await env.SPN_DB.batch(stmts);
+        return json({ ok: true, user: merged });
+      }
+
+      if (/^users\/[A-Za-z0-9_-]{1,64}\/security$/.test(route) && req.method === 'POST') {
+        if (session.user.role !== 'SuperUser') return json({ error: 'Super User required' }, 403);
+        const id = route.split('/')[1];
+        const row = await env.SPN_DB.prepare('SELECT id, json, pass_hash FROM users WHERE id = ?').bind(id).first();
+        if (!row) return json({ error: 'Unknown user' }, 404);
+        const body = await req.json().catch(() => ({}));
+        const action = String(body.action || '');
+        const target = JSON.parse(row.json);
+        const self = id === session.userId;
+        const now = Date.now();
+
+        if (action === 'password') {
+          const password = String(body.password || '');
+          if (password.length < 8) return json({ error: 'A password must be at least 8 characters' }, 400);
+          if (password.length > 200) return json({ error: 'That password is too long' }, 400);
+          const mustChange = body.mustChange === false ? 0 : 1;
+          const { hash, salt } = await makePassword(password);
+          const stmts = [env.SPN_DB.prepare('UPDATE users SET pass_hash = ?, pass_salt = ?, must_change = ?, updated_at = ? WHERE id = ?')
+            .bind(hash, salt, mustChange, now, id)];
+          /* a reset ends the account's other sessions: a stolen 7 day token must not
+             outlive the reset that was meant to stop it. The caller's own token is
+             always spared, or a Super User resetting their own password signs
+             themselves out mid-action. */
+          if (body.revokeSessions !== false) {
+            stmts.push(self
+              ? env.SPN_DB.prepare('DELETE FROM sessions WHERE user_id = ? AND token != ?').bind(id, session.token)
+              : env.SPN_DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(id));
+          }
+          await env.SPN_DB.batch(stmts);
+          return json({ ok: true });
+        }
+
+        if (action === 'clear-password') {
+          if (self) return json({ error: 'You cannot clear your own password' }, 400);
+          if (target.role === 'SuperUser' && (await superUserCount(env, [], [])) <= 1) return json({ error: 'The last active Super User must keep a password' }, 400);
+          await env.SPN_DB.batch([
+            env.SPN_DB.prepare('UPDATE users SET pass_hash = NULL, pass_salt = NULL, must_change = 0, updated_at = ? WHERE id = ?').bind(now, id),
+            env.SPN_DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(id),
+          ]);
+          return json({ ok: true });
+        }
+
+        if (action === 'require-change') {
+          if (!row.pass_hash) return json({ error: 'This account has no password yet' }, 400);
+          await env.SPN_DB.prepare('UPDATE users SET must_change = ?, updated_at = ? WHERE id = ?')
+            .bind(body.mustChange === false ? 0 : 1, now, id).run();
+          return json({ ok: true });
+        }
+
+        if (action === 'revoke-sessions') {
+          /* counted before the delete: meta.changes is not guaranteed across runtimes */
+          const before = await env.SPN_DB.prepare('SELECT COUNT(*) AS n FROM sessions WHERE user_id = ?' + (self ? ' AND token != ?' : ''))
+            .bind(...(self ? [id, session.token] : [id])).first();
+          if (self) await env.SPN_DB.prepare('DELETE FROM sessions WHERE user_id = ? AND token != ?').bind(id, session.token).run();
+          else await env.SPN_DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(id).run();
+          return json({ ok: true, revoked: (before && before.n) || 0 });
+        }
+
+        return json({ error: 'Unknown account action' }, 400);
+      }
+
+      if (/^users\/[A-Za-z0-9_-]{1,64}$/.test(route) && req.method === 'DELETE') {
+        if (!isAdmin(session.user)) return json({ error: 'Admin or Super User required' }, 403);
+        const id = route.slice('users/'.length);
+        if (id === session.userId) return json({ error: 'You cannot delete your own account' }, 400);
+        const row = await env.SPN_DB.prepare('SELECT id, json FROM users WHERE id = ?').bind(id).first();
+        if (!row) return json({ ok: true, removed: 0 });
+        /* rejecting a registration is an Admin duty, so an Admin may delete a Pending
+           account. Deleting a live one, and anything touching a Super User, is not. */
+        if (session.user.role !== 'SuperUser') {
+          let target = {}; try { target = JSON.parse(row.json); } catch (e) {}
+          if (target.role === 'SuperUser') return json({ error: 'Only the Super User can remove a Super User account' }, 403);
+          if (statusOf(target) !== 'Pending') return json({ error: 'Only the Super User can delete an account that is already in use' }, 403);
+        }
+        if ((await superUserCount(env, [], [id])) < 1) return json({ error: 'The workspace must keep at least one active Super User' }, 400);
+        await env.SPN_DB.batch([
+          env.SPN_DB.prepare('DELETE FROM users WHERE id = ?').bind(id),
+          env.SPN_DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(id),
+          env.SPN_DB.prepare('DELETE FROM invites WHERE used_by = ?').bind(id),
+        ]);
+        return json({ ok: true, removed: 1 });
       }
 
       if (route === 'files' && req.method === 'POST') {
@@ -566,7 +822,18 @@ async function handleApi(req, env, url) {
         const collRows = (await env.SPN_DB.prepare('SELECT name, json FROM collections').all()).results || [];
         const collections = {};
         collRows.forEach(r => { try { collections[r.name] = JSON.parse(r.json); } catch (e) {} });
-        return json({ users: userRows.map(r => JSON.parse(r.json)), collections });
+        /* colleagues' contact details are not everyone's business: an admin, and
+           anyone holding the HR module (who builds staff records out of accounts and
+           needs the phone and email to do it), sees the whole row. Everyone else gets
+           the fields the app actually renders, plus their own record in full.
+           Keyed off the granted module, not the role, so an HOD given HR still works. */
+        const full = isAdmin(session.user) || session.user.role === 'HR'
+          || (Array.isArray(session.user.access) && session.user.access.includes('hr'));
+        const users = userRows.map(r => JSON.parse(r.json)).map(u => (full || u.id === session.userId) ? u : {
+          id: u.id, name: u.name, role: u.role, designation: u.designation,
+          department: u.department || '', status: statusOf(u), avatar: u.avatar || null, access: u.access || [],
+        });
+        return json({ users, collections });
       }
 
       if (route.startsWith('collections/') && req.method === 'PUT') {
@@ -593,29 +860,132 @@ async function handleApi(req, env, url) {
         const body = await req.json().catch(() => null);
         const users = Array.isArray(body) ? body : (body && body.users);
         const remove = (!Array.isArray(body) && body && Array.isArray(body.remove)) ? body.remove.map(String) : [];
-        if (!Array.isArray(users) || !users.length) return json({ error: 'A non-empty user list is required' }, 400);
+        /* a pure deletion is allowed to send an empty user list; anything else must
+           carry rows, so an empty body can never be read as "wipe everything" */
+        if (!Array.isArray(users) || (!users.length && !remove.length)) return json({ error: 'A non-empty user list is required' }, 400);
         if (remove.includes(session.userId)) return json({ error: 'You cannot remove your own account' }, 400);
-        if (users.some(u => !u || typeof u !== 'object' || !u.id)) return json({ error: 'Every user needs an id' }, 400);
+        if (users.some(u => !u || typeof u !== 'object' || !USER_ID_RE.test(String(u.id || '')))) return json({ error: 'Every user needs a valid id' }, 400);
+        if (users.some(u => u.role !== undefined && !ROLES.includes(u.role))) return json({ error: 'Unknown role' }, 400);
+        if (users.some(u => u.status !== undefined && !STATUSES.includes(u.status))) return json({ error: 'Unknown status' }, 400);
+        const known = (await env.SPN_DB.prepare('SELECT id, json FROM users').all()).results || [];
+        const storedOf = {}; known.forEach(r => { try { storedOf[r.id] = JSON.parse(r.json); } catch (e) {} });
+        /* nobody demotes or suspends the account they are signed in with, on this
+           route either: the deliberate edits go through PUT /api/users/:id */
+        const mine = users.find(u => String(u.id) === session.userId);
+        if (mine && storedOf[session.userId]) {
+          if (mine.role !== undefined && mine.role !== storedOf[session.userId].role) return json({ error: 'Sign in from another Super User account to change your own role' }, 400);
+          if (mine.status !== undefined && statusOf(mine) !== statusOf(storedOf[session.userId])) return json({ error: 'Sign in from another Super User account to change your own status' }, 400);
+        }
+        const skipped = [];
+        /* merge, never replace: a field the client did not send keeps its stored
+           value, so an older build or a projected copy cannot wipe what it never saw */
+        let writable = users.map(u => Object.assign({}, storedOf[u.id] || {}, u, { id: String(u.id) }));
         /* role integrity: only the Super User can grant, revoke or remove the SuperUser role */
         if (session.user.role !== 'SuperUser') {
-          const ids = [...new Set(users.map(u => String(u.id)).concat(remove))];
-          const rows = ids.length ? ((await env.SPN_DB.prepare(`SELECT id, json FROM users WHERE id IN (${ids.map(() => '?').join(',')})`).bind(...ids).all()).results || []) : [];
-          const roleOf = {}; rows.forEach(r => { try { roleOf[r.id] = JSON.parse(r.json).role; } catch (e) {} });
-          const escalates = users.some(u => (u.role === 'SuperUser' && roleOf[u.id] !== 'SuperUser') || (roleOf[u.id] === 'SuperUser' && u.role !== 'SuperUser'));
-          const removesSuper = remove.some(id => roleOf[id] === 'SuperUser');
+          const escalates = users.some(u => u.role === 'SuperUser' && (!storedOf[u.id] || storedOf[u.id].role !== 'SuperUser'));
+          const removesSuper = remove.some(id => storedOf[id] && storedOf[id].role === 'SuperUser');
           if (escalates || removesSuper) return json({ error: 'Only the Super User can grant, revoke or remove the Super User role' }, 403);
+          /* an Admin's bulk sync never rewrites a Super User's record: their copy may
+             be minutes old, and a stale copy must not rename or suspend the owner.
+             Skipped silently rather than 403'd, or one drifted row would block the
+             Admin's entire account sync for good. */
+          writable = writable.filter(u => {
+            if (storedOf[u.id] && storedOf[u.id].role === 'SuperUser') { skipped.push(u.id); return false; }
+            return true;
+          });
+          /* an Admin approves registrations; suspending is the Super User's call */
+          writable = writable.map(u => {
+            const prev = storedOf[u.id]; if (!prev) return u;
+            const was = statusOf(prev), next = statusOf(u);
+            if (next === was || (was === 'Pending' && next === 'Active')) return u;
+            skipped.push(u.id + ':status');
+            return Object.assign({}, u, { status: was });
+          });
         }
+        if ((await superUserCount(env, writable, remove)) < 1) return json({ error: 'The workspace must keep at least one active Super User' }, 400);
         const now = Date.now();
         /* upsert only: rows registered after the client's snapshot are never deleted implicitly */
-        const stmts = users.map(u => env.SPN_DB.prepare(
+        const stmts = writable.map(u => env.SPN_DB.prepare(
           'INSERT INTO users (id, json, updated_at) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET json = excluded.json, updated_at = excluded.updated_at'
         ).bind(u.id, JSON.stringify(u), now));
+        /* an account that is no longer Active holds no sessions */
+        writable.filter(u => statusOf(u) !== 'Active').forEach(u => {
+          stmts.push(env.SPN_DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(u.id));
+        });
         remove.forEach(id => {
           stmts.push(env.SPN_DB.prepare('DELETE FROM users WHERE id = ?').bind(id));
           stmts.push(env.SPN_DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(id));
         });
+        if (stmts.length) await env.SPN_DB.batch(stmts);
+        return json(skipped.length ? { ok: true, skipped } : { ok: true });
+      }
+
+      /* ---- backup & restore (Super User only) ----
+         The backup is the whole workspace: users (profiles only, never password
+         hashes) and every collection. Email sends it as a JSON attachment via the
+         Email Sending binding; restore upserts users (passwords are preserved
+         because the hash columns are untouched) and replaces the collections. */
+      if (route === 'backup' && req.method === 'GET') {
+        if (session.user.role !== 'SuperUser') return json({ error: 'Super User required' }, 403);
+        return json(await buildBackupDump(env));
+      }
+      if (route === 'backup/email' && req.method === 'POST') {
+        if (session.user.role !== 'SuperUser') return json({ error: 'Super User required' }, 403);
+        if (!emailConfigured(env)) return json({ error: 'Email sending is not configured on this deployment (set EMAIL_FROM in wrangler.jsonc). Download the backup instead.' }, 503);
+        const body = await req.json().catch(() => ({}));
+        const to = (Array.isArray(body.to) ? body.to : String(body.to || '').split(',')).map(s => String(s).trim()).filter(s => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s)).slice(0, 5);
+        if (!to.length) return json({ error: 'Give at least one valid email address' }, 400);
+        const dump = await buildBackupDump(env);
+        const text = JSON.stringify(dump);
+        if (text.length > 8 * 1024 * 1024) return json({ error: 'The backup is too large to email (' + Math.round(text.length / 1048576) + ' MB); download it from Users & Access instead.' }, 413);
+        const fname = 'SPN-Backup-' + new Date().toISOString().slice(0, 10) + '.json';
+        const results = [];
+        for (const addr of to) {
+          try {
+            await env.SPN_EMAIL.send({
+              to: [{ email: addr }],
+              from: { email: env.EMAIL_FROM, name: env.EMAIL_FROM_NAME || 'SPN ERP' },
+              subject: 'SPN workspace backup · ' + new Date().toISOString().slice(0, 10),
+              text: 'Attached is the SPN ERP workspace backup requested by ' + session.user.name + '. Restore it from Users & Access -> Restore from backup. Password hashes are never included; accounts keep their existing passwords after a restore.',
+              attachments: [{ filename: fname, type: 'application/json', disposition: 'attachment', content: btoa(unescape(encodeURIComponent(text))) }],
+            });
+            results.push({ to: addr, ok: true });
+          } catch (e) {
+            results.push({ to: addr, ok: false, error: String((e && e.message) || e) });
+          }
+        }
+        const sent = results.filter(r => r.ok).length;
+        if (!sent) return json({ error: 'Could not send the backup email: ' + (results[0] && results[0].error), results }, 502);
+        return json({ ok: true, sent, results, size: text.length });
+      }
+      if (route === 'restore' && req.method === 'POST') {
+        if (session.user.role !== 'SuperUser') return json({ error: 'Super User required' }, 403);
+        const body = await req.json().catch(() => null);
+        if (!body || body.kind !== 'spn-erp-backup' || !body.collections) return json({ error: 'That file is not an SPN ERP backup' }, 400);
+        const now = Date.now();
+        const stmts = [];
+        if (Array.isArray(body.users)) {
+          /* a doctored or hand-edited backup is an ingress like any other: an id
+             that is not plain text ends up inside an onclick in the SPA, and an
+             unknown role or status would silently bypass every guardrail below */
+          const usable = body.users.filter(u => u && USER_ID_RE.test(String(u.id || ''))
+            && (u.role === undefined || ROLES.includes(u.role))
+            && (u.status === undefined || STATUSES.includes(u.status)));
+          if (!usable.length) return json({ error: 'That backup contains no usable account records' }, 400);
+          if ((await superUserCount(env, usable, [])) < 1) {
+            return json({ error: 'That backup would leave the workspace without an active Super User' }, 400);
+          }
+          for (const u of usable) {
+            stmts.push(env.SPN_DB.prepare('INSERT INTO users (id, json, updated_at) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET json = excluded.json, updated_at = excluded.updated_at').bind(u.id, JSON.stringify(u), now));
+          }
+        }
+        for (const name of COLLECTIONS) {
+          if (name in body.collections) {
+            stmts.push(env.SPN_DB.prepare('INSERT INTO collections (name, json, updated_at) VALUES (?, ?, ?) ON CONFLICT(name) DO UPDATE SET json = excluded.json, updated_at = excluded.updated_at').bind(name, JSON.stringify(body.collections[name]), now));
+          }
+        }
         await env.SPN_DB.batch(stmts);
-        return json({ ok: true });
+        return json({ ok: true, users: (body.users || []).length, collections: Object.keys(body.collections).filter(k => COLLECTIONS.includes(k)).length });
       }
 
       if (route === 'reset' && req.method === 'POST') {

@@ -6,6 +6,12 @@
       "runtimeExecutable": "node",
       "runtimeArgs": [".claude/serve.js"],
       "port": 4173
+    },
+    {
+      "name": "spn-erp-worker",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["wrangler", "dev", "--port", "8787", "--local", "--cwd", "app"],
+      "port": 8787
     }
   ]
 }

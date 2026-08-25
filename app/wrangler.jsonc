@@ -29,7 +29,11 @@
 	//   2) set EMAIL_FROM below to an address on that domain, e.g. invites@yourdomain.com
 	//   3) npx wrangler deploy
 	// Until EMAIL_FROM is set, invitations fall back to a shareable link.
-	"send_email": [{ "name": "SPN_EMAIL" }],
+	"send_email": [
+		{
+			"name": "SPN_EMAIL"
+		}
+	],
 	// Binary files (livestock photos, profile photos, SPN OS APK releases) can live
 	// in R2. R2 must first be enabled on the Cloudflare account (Dashboard -> R2
 	// Object Storage -> Enable; it asks for a payment method even for the free
@@ -48,5 +52,12 @@
 		// Extra origins allowed to call the API cross-origin (comma separated), e.g.
 		// a custom scheme for the mobile app. Capacitor defaults are always allowed.
 		"ALLOWED_ORIGINS": ""
-	}
+	},
+	"r2_buckets": [
+		{
+			"bucket_name": "spn-erp-files",
+			"binding": "spn_erp_files",
+			"remote": true
+		}
+	]
 }

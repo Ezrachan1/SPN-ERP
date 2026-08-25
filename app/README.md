@@ -32,6 +32,44 @@ letterheaded reports, role-based access and a full audit log.
 - **First-run setup**: the first visit to a fresh deployment walks you
   through creating the System Super User and the organisation profile, then
   offers a clean start or a demo dataset.
+- **Multi-item POS with a price list**: one receipt carries any number of lines
+  (tomato seedlings + maize + pawpaw to one buyer) in seedlings, **trays** (with
+  tray size), kg, pcs or bags; a managed price list fills unit and price when a
+  product is picked. Vendors & Suppliers register feeds purchase requests and
+  seed lots. Livestock tags auto-increment per species (COW-001, SH-002, ...).
+- **Backup & restore (Super User)**: download the whole workspace as one JSON
+  file, email it as an attachment to chosen addresses (needs EMAIL_FROM), and
+  restore from a file - accounts keep their passwords (hashes never leave the
+  server). Account details and editing in Users & Access are Super User only.
+- **Super User account management**: every account in Users & Access opens as a
+  panel with three tabs. **Profile** edits name, designation, phone, email,
+  department, avatar, role and status; **Module access** ticks the modules for
+  that one person (the wide matrix stays, for the whole team side by side);
+  **Sign-in & security** shows whether a password is set, whether a change is
+  forced at the next sign-in, how many devices are signed in, the last sign-in
+  and when the record was last touched. From there the Super User can set or
+  generate a password (shown once, copyable, never written to the audit log or a
+  backup), force or cancel a change at next sign-in, sign the account out of
+  every device, clear the password, or delete the account. The user list is
+  searchable and filters by status or role.
+- **Account status**: `Active`, `Pending` (awaiting approval) or `Suspended`.
+  Suspending deletes the account's sessions immediately, blocks the next
+  sign-in, and hides it from the sign-in picker and from the pickers across the
+  app. Only an Active account may sign in or hold a session, re-checked on every
+  request rather than when the 7 day token happens to expire.
+- **Guardrails** are enforced on the server, not only in the browser: the
+  workspace must keep at least one active Super User; nobody can demote,
+  suspend, delete or clear the password of the account they are signed in with;
+  an Admin can approve or reject a registration but cannot suspend a live
+  account, grant the Super User role, or edit a Super User's record through the
+  bulk sync route. Account ids are validated at every ingress (setup, register,
+  restore, sync) because they are rendered into the page.
+  Recovery, if a workspace somehow ends up with no usable Super User, is
+  `npx wrangler d1 execute spn-erp --command "UPDATE users SET json = json_set(json_set(json,'$.role','SuperUser'),'$.status','Active') WHERE id='<id>'"`.
+- **Agronomy**: spray advisory now includes fungicide + insecticide category
+  suggestions (FRAC/IRAC rotation, PCPB note); the irrigation calculator adds
+  pump fuel (default 3.5 L/hr); crop water requirements use crop-specific
+  FAO-56 Kc tables (tomato, maize, pawpaw, ...) with live Open-Meteo ETo.
 - **Seedling stock that moves**: a POS sale picks the nursery batch it comes
   from and draws it down (over-selling is blocked); batches can be marked sold
   out / transplanted. Dashboard, pipeline, Seedling Stock, the POS list and the

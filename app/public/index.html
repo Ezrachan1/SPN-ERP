@@ -714,6 +714,7 @@ body.sb-collapsed .shell{grid-template-columns:1fr;}
 const ICONS = {
   dashboard:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>',
   seed:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21c-5 0-8-3-8-8 0-4 3-8 8-10 5 2 8 6 8 10 0 5-3 8-8 8z"/><path d="M12 21V9"/><path d="M12 13c2 0 3-1 4-3M12 16c-2 0-3-1-4-3"/></svg>',
+  supplier:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l2-5h14l2 5"/><path d="M4 9h16v11H4z"/><path d="M9 20v-6h6v6"/><path d="M3 9h18"/></svg>',
   sale:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7h18l-2 10a2 2 0 01-2 2H7a2 2 0 01-2-2L3 7z"/><path d="M8 7V5a4 4 0 018 0v2"/></svg>',
   leads:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 22s7-6.4 7-12a7 7 0 10-14 0c0 5.6 7 12 7 12z"/><circle cx="12" cy="10" r="2.5"/></svg>',
   sow:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 20V10M12 10c0-4 3-6 7-6-1 5-3 7-7 6zM12 14c0-3-2-5-6-5 0 4 2 6 6 5z"/></svg>',
@@ -772,6 +773,7 @@ const MODULES = [
   {group:'Procurement & Stock', items:[
     {key:'procurement', label:'Procurement', icon:'procure'},
     {key:'consumables', label:'Consumables Stock', icon:'consum'},
+    {key:'suppliers', label:'Vendors & Suppliers', icon:'supplier'},
   ]},
   {group:'Field Intelligence', items:[
     {key:'scouting', label:'AI Photo Scan', icon:'scan'},
@@ -805,7 +807,7 @@ const ROLE_DEFAULT_ACCESS = {
   Finance: ['dashboard','requisitions','reports'],
   Sales: ['dashboard','cashsale','leads','leadsmap','weather','salesanalytics'],
   Agronomist: ['dashboard','sowing','seedinventory','sownstatus','scouting','weather','requisitions','leadsmap','livestock','acreage','irrigation','farm'],
-  Procurement: ['dashboard','procurement','consumables','seedinventory','requisitions','reports'],
+  Procurement: ['dashboard','procurement','consumables','suppliers','seedinventory','requisitions','reports'],
   Marketing: ['dashboard','leads','reports','leadsmap','salesanalytics'],
   Casual: ['weather'],
 };
@@ -818,6 +820,59 @@ const ROLE_DESIGNATIONS = {
 const REGISTER_ROLES = ['HOD','HR','Finance','Sales','Agronomist','Procurement','Marketing','Casual','Admin'];
 function isSuper(){ return !!(CURRENT && CURRENT.role==='SuperUser'); }
 function canManage(){ return isSuper() || (CURRENT && CURRENT.role==='Admin'); }
+
+/* ---- account status, guardrails and password helpers ----
+   Status vocabulary is Active / Pending / Suspended. Seeded and legacy records carry
+   no status key at all, so absent always means Active and every reader goes through
+   these helpers rather than asking "is it Pending?" and assuming the rest is fine. */
+const USER_STATUSES = ['Active','Pending','Suspended'];
+const userStatusOf = u => (u && u.status) || 'Active';
+const isActiveUser = u => userStatusOf(u)==='Active';
+function userStatusChip(u){
+  const s = userStatusOf(u);
+  return s==='Pending'? st('amber','Awaiting approval') : (s==='Suspended'? st('rust','Suspended') : st('green','Active'));
+}
+/* An account id is chosen by the client at registration and is interpolated into
+   onclick handlers here and inside dataTable. The server now rejects anything that
+   is not plain text, but an older database may already hold one, so such rows are
+   quarantined rather than rendered. */
+const SAFE_ID = /^[A-Za-z0-9_-]{1,64}$/;
+const isSafeId = id => SAFE_ID.test(String(id||''));
+/* Without an active Super User nobody can issue a password, back up, restore or
+   reset the workspace, and there is no way back in. */
+const activeSuperUsers = excludeId => DATA.users.filter(u=>u.role==='SuperUser' && isActiveUser(u) && u.id!==excludeId).length;
+function isLastSuperUser(id){
+  const u = DATA.users.find(x=>x.id===id);
+  return !!(u && u.role==='SuperUser' && isActiveUser(u) && activeSuperUsers(id)===0);
+}
+/* passwords, sessions and deletions cannot be queued: they need a live connection */
+const serverActionAvailable = () => !!(SERVER_MODE && API.token && !OFFLINE && !SESSION_EXPIRED);
+/* 18 characters from an unambiguous alphabet with no quote, ampersand or angle
+   bracket, so a generated password can never break out of an attribute and is
+   readable out loud over a phone */
+const PW_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#%*?-_+=';
+function strongPassword(len){
+  const n = len||18, out = [], max = 256 - (256 % PW_ALPHABET.length);
+  while(out.length<n){
+    const buf = crypto.getRandomValues(new Uint8Array(n));
+    for(let i=0;i<buf.length && out.length<n;i++){ if(buf[i]<max) out.push(PW_ALPHABET[buf[i]%PW_ALPHABET.length]); }
+  }
+  return out.join('');
+}
+function fillGeneratedPassword(inputId){
+  const el=document.getElementById(inputId); if(!el) return;
+  el.value = strongPassword(18); el.type='text';
+  toast('A strong password was generated. Copy it before you close this window.');
+}
+function copyFieldValue(inputId){
+  const el=document.getElementById(inputId);
+  if(!el || !el.value){ toast('Nothing to copy yet.','err'); return; }
+  navigator.clipboard.writeText(el.value).then(()=>toast('Password copied to the clipboard.')).catch(()=>toast('Could not reach the clipboard - select and copy it by hand.','err'));
+}
+function togglePasswordField(inputId){
+  const el=document.getElementById(inputId); if(!el) return;
+  el.type = el.type==='password' ? 'text' : 'password';
+}
 
 function uid(p){return p+'_'+Math.random().toString(36).slice(2,9);}
 /* Dates are local calendar dates (Nairobi), never UTC: a sale at 01:00 belongs to
@@ -893,6 +948,8 @@ function defaultData(){
     ],
     seedlingStock:[],
     seedInventory:[],
+    priceList:[],
+    suppliers:[],
     livestockInventory:[
       {id:'lv1', tag:'COW-001', species:'dairy', breed:'Friesian', sex:'Female', dob:'2022-03-10', qty:1, weightKg:420, status:'Active', source:'Purchased', cost:120000, acquiredDate:'2023-05-15', notes:'Second lactation'},
       {id:'lv2', tag:'COW-002', species:'dairy', breed:'Ayrshire', sex:'Female', dob:'2023-01-22', qty:1, weightKg:380, status:'Active', source:'Born on farm', cost:0, acquiredDate:'2023-01-22', notes:''},
@@ -1137,7 +1194,7 @@ async function loadData(){
 /* activityStats is NOT in this list: every user writes it constantly, so syncing the
    whole object would make sessions overwrite each other; increments go through the
    server-merged /api/activity route instead */
-const COLLECTION_KEYS = ['departments','staff','consumables','seedlingStock','seedInventory','livestockInventory','farmPlots','rainfallLog','reportAccess','sowingRecords','cashSales','procurement','requisitions','leads','auditLog','reportsAccessList','accessRequests','aiScans','weatherLocation','salesHistory','priceHistory','companyKraPin','leadsMonthlyTarget','org'];
+const COLLECTION_KEYS = ['departments','staff','consumables','seedlingStock','seedInventory','priceList','suppliers','livestockInventory','farmPlots','rainfallLog','reportAccess','sowingRecords','cashSales','procurement','requisitions','leads','auditLog','reportsAccessList','accessRequests','aiScans','weatherLocation','salesHistory','priceHistory','companyKraPin','leadsMonthlyTarget','org'];
 /* ---------------- sync state ----------------
    SYNC_BASE: per collection, a hash of the last state known to be on the server
    (persisted as spn_sync_base). SYNC_SNAPSHOT: the matching JSON, persisted per
@@ -1210,7 +1267,15 @@ async function flushSave(){
     });
     const ujson = JSON.stringify(DATA.users), uj = syncHash(ujson);
     if(SYNC_BASE.__users !== uj){
-      if(canManage()) puts.push(API.req('users', {method:'PUT', body:DATA.users}).then(()=>{ setSynced('__users', ujson); }));
+      if(canManage()){
+        /* only the rows this device actually changed. A whole-array PUT would revert
+           a colleague's own profile edit made since this page was loaded, silently. */
+        const base = parseSnap('__users');
+        const baseMap = new Map(Array.isArray(base) ? base.map(u=>[u.id, JSON.stringify(u)]) : []);
+        const changed = Array.isArray(base) ? DATA.users.filter(u=>baseMap.get(u.id)!==JSON.stringify(u)) : DATA.users.slice();
+        if(changed.length) puts.push(API.req('users', {method:'PUT', body:{users:changed, remove:[]}}).then(()=>{ setSynced('__users', ujson); }));
+        else setSynced('__users', ujson); /* a re-ordering only: nothing to push */
+      }
       else setSynced('__users', ujson); /* only admins can write users; nothing to push */
     }
     if(PENDING_ACTIVITY>0 && CURRENT){
@@ -1523,7 +1588,8 @@ let SERVER_SETUP = false;
 let LOGIN_DIRECTORY = null; /* server mode: public user list for the login select */
 function loginUserOptions(){
   const list = (SERVER_MODE && LOGIN_DIRECTORY && LOGIN_DIRECTORY.length) ? LOGIN_DIRECTORY : DATA.users;
-  return list.map(u=>`<option value="${u.id}">${esc(u.name)} - ${esc(u.designation)}${u.status==='Pending'?' (awaiting approval)':''}</option>`).join('');
+  return list.filter(u=>isSafeId(u.id) && userStatusOf(u)!=='Suspended')
+    .map(u=>`<option value="${esc(u.id)}">${esc(u.name)} - ${esc(u.designation)}${userStatusOf(u)==='Pending'?' (awaiting approval)':''}</option>`).join('');
 }
 let loginView = 'signin'; /* 'signin' | 'register' | 'registered' */
 let INVITE_INFO = null;   /* {token, role} when arriving via an invitation link */
@@ -1656,7 +1722,7 @@ function renderLogin(){
     </form>
     <div class="demo-strip">
       <div class="ds-label">Quick demo access · password auto-filled</div>
-      <div class="demo-chips">${DATA.users.map(u=>`<button type="button" class="demo-chip" onclick="quickLogin('${u.id}')">${esc(u.name.split(' ')[0])} · ${esc(u.role)}</button>`).join('')}</div>
+      <div class="demo-chips">${DATA.users.filter(u=>isSafeId(u.id) && isActiveUser(u)).map(u=>`<button type="button" class="demo-chip" onclick="quickLogin('${esc(u.id)}')">${esc(u.name.split(' ')[0])} · ${esc(u.role)}</button>`).join('')}</div>
     </div>
     <div class="login-foot">Demo workspace: data is saved to your browser. Demo password for all accounts: <b class="mono">spn2026</b>. Deploy to Cloudflare for the production database and per-user passwords.</div>`;
   loadAppLink('login-app-link');
@@ -1707,7 +1773,8 @@ async function submitLogin(ev){
       }
       if(keepLocal) scheduleRetry(); else await loadServerState();
       if(errEl) errEl.style.display='none';
-      login(userId);
+      /* the server checked the account status before issuing this token */
+      login(userId, false, true);
       if(res.mustChange) openChangePasswordModal(true);
     }catch(e){
       loginError(e.status===403 ? e.message : 'Incorrect password for this account.');
@@ -1798,7 +1865,7 @@ async function submitRegister(ev){
 }
 function emptyWorkspace(){
   const d = defaultData();
-  ['staff','consumables','seedlingStock','seedInventory','livestockInventory','farmPlots','rainfallLog','sowingRecords','cashSales','procurement','requisitions','leads','accessRequests','aiScans','salesHistory','priceHistory'].forEach(k=>{ d[k]=[]; });
+  ['staff','consumables','seedlingStock','seedInventory','priceList','suppliers','livestockInventory','farmPlots','rainfallLog','sowingRecords','cashSales','procurement','requisitions','leads','accessRequests','aiScans','salesHistory','priceHistory'].forEach(k=>{ d[k]=[]; });
   d.users = [];
   d.activityStats = {};
   d.auditLog = [{ts:Date.now(), user:'System', action:'Workspace initialised for production use.'}];
@@ -1836,12 +1903,23 @@ function openChangePasswordModal(force){
     }}
   ]);
 }
-function login(userId, resumed){
+function login(userId, resumed, serverAuthorised){
   CURRENT = DATA.users.find(u=>u.id===userId);
   if(!CURRENT){ toast('Account not found.','err'); return; }
+  /* Standalone mode has no server to gate on, and a resumed offline session must not
+     revive an account this device already knows is suspended. Skipped when the server
+     just authorised the sign-in: it holds the authoritative status, and this device's
+     copy may predate an approval or a reactivation. */
+  if(!serverAuthorised && !isActiveUser(CURRENT)){
+    const pending = userStatusOf(CURRENT)==='Pending';
+    CURRENT = null;
+    toast(pending? 'This registration is still awaiting approval by an administrator.' : 'This account has been suspended. Ask the Super User to reactivate it.','err');
+    return;
+  }
   /* modules added in newer versions: anyone who records sowing also sees the seed lots */
   CURRENT.access = CURRENT.access || [];
   if(CURRENT.access.includes('sowing') && !CURRENT.access.includes('seedinventory')) CURRENT.access.push('seedinventory');
+  if(CURRENT.access.includes('procurement') && !CURRENT.access.includes('suppliers')) CURRENT.access.push('suppliers');
   document.getElementById('login-screen').style.display='none';
   document.getElementById('app').style.display='block';
   document.getElementById('uc-avatar').innerHTML = avatarInner(CURRENT);
@@ -1946,6 +2024,7 @@ const VIEW_TITLES = {
   livestock:['Livestock','Herd inventory, feed guidance and weight estimation'],
   procurement:['Procurement','Purchase requests, orders and goods received'],
   consumables:['Consumables Stock','Inputs and consumables stock balance'],
+  suppliers:['Vendors & Suppliers','Supplier register: contacts, categories, terms and linked purchases'],
   scouting:['AI Photo Scan','Field & nursery scouting assistant'],
   weather:['Weather & Field Conditions','30-day outlook, area search and historical archive'],
   acreage:['Acreage Measurement','Measure plot area by walking the perimeter or adding points'],
@@ -1981,7 +2060,7 @@ function nav(key, opts){
     dashboard:renderDashboard, cashsale:renderCashSale, leads:renderLeads, leadsmap:renderLeadsMap,
     salesanalytics:renderSalesAnalytics, sowing:renderSowing, seedinventory:renderSeedInventory,
     sownstatus:renderSownStatus, seedlingstock:renderSeedlingStock, livestock:renderLivestock, procurement:renderProcurement,
-    consumables:renderConsumables, scouting:renderScouting, weather:renderWeatherView, acreage:renderAcreage, irrigation:renderIrrigation, farm:renderFarm, hr:renderHR,
+    consumables:renderConsumables, suppliers:renderSuppliers, scouting:renderScouting, weather:renderWeatherView, acreage:renderAcreage, irrigation:renderIrrigation, farm:renderFarm, hr:renderHR,
     requisitions:renderRequisitions, reports:renderReports, departments:renderDepartments, access:renderAccess, audit:renderAudit,
     profile:renderProfile,
   };
@@ -2295,7 +2374,9 @@ function openModal(title, bodyHTML, buttons, opts){
   });
   bg.addEventListener('click', e=>{ if(e.target===bg) closeModal(); });
 }
-function closeModal(){ const m=document.getElementById('active-modal'); if(m) m.remove(); }
+/* the account panel state goes with the modal, including any revealed password:
+   it is held in memory for exactly as long as the window is open */
+function closeModal(){ const m=document.getElementById('active-modal'); if(m) m.remove(); if(typeof UPANEL!=='undefined' && UPANEL){ UPANEL.pw=null; UPANEL=null; } }
 
 function kpi(label, value, sub, icon, subclass, display){
   return `<div class="card kpi"><div class="kpi-icon">${ICONS[icon]}</div><div class="k-label">${label}</div><div class="k-value ${display?'display':''}">${value}</div><div class="k-sub ${subclass||''}">${sub}</div></div>`;
@@ -2953,6 +3034,7 @@ function renderCashSale(root){
   root.innerHTML = `
   <div class="view-header"><div><h2>Cash Sale (POS)</h2><p>KRA-aligned receipt for seedling sales - agricultural produce is generally VAT exempt in Kenya; treatment is confirmed per transaction. Click any sale to open it and download its receipt.${CURRENT.role==='Sales'?' Showing your own sales only.':''}</p></div>
   <div style="display:flex;gap:8px;flex-wrap:wrap;">
+    <button class="btn secondary" onclick="openPriceListModal()">Price list${(DATA.priceList||[]).length? ' · '+DATA.priceList.length : ''}</button>
     <button class="btn secondary" onclick="exportCashSalesExcel()">⬇ Excel</button>
     <button class="btn secondary" onclick="exportCashSalesPDF()">⬇ PDF</button>
     <button class="btn" onclick="openSaleModal()">+ New cash sale</button>
@@ -2972,8 +3054,8 @@ function renderCashSale(root){
       {key:'date', label:'Date', val:r=>r.date, html:r=>fmtDate(r.date)},
       {key:'customer', label:'Customer', val:r=>r.customer+' '+(r.phone||''), html:r=>`<div class="cell-main">${esc(r.customer)}</div><div class="cell-sub">${esc(r.phone)}</div>`},
       {key:'kraPin', label:'KRA PIN', val:r=>r.kraPin||'', html:r=>r.kraPin?`<span class="mono">${esc(r.kraPin)}</span>`:'<span class="small-muted">-</span>'},
-      {key:'crop', label:'Item', val:r=>r.crop},
-      {key:'qty', label:'Qty', align:'right', val:r=>r.qty, html:r=>`<span class="mono">${r.qty.toLocaleString()}</span>`},
+      {key:'crop', label:'Items', val:r=>r.crop, html:r=>{ const its=saleItems(r); return `<div class="cell-main">${esc(its[0].crop)}</div>${its.length>1? `<div class="cell-sub">+ ${its.length-1} more item${its.length===2?'':'s'}</div>`:''}`; }},
+      {key:'qty', label:'Qty', align:'right', val:r=>saleQtyTotal(r), html:r=>{ const its=saleItems(r); return `<span class="mono">${its.length===1? esc(itemQtyLabel(its[0])) : saleQtyTotal(r).toLocaleString()}</span>`; }},
       {key:'total', label:'Total', align:'right', val:r=>r.total, html:r=>`<b class="mono">${money(r.total)}</b>`},
       {key:'vat', label:'VAT', val:r=>r.vat, html:r=>st('green', r.vat.split(' ')[0])},
       {key:'payment', label:'Payment', val:r=>r.payment},
@@ -2998,10 +3080,8 @@ function openSaleDrawer(id){
       ['Phone', esc(s.phone)||'-'],
       ['Customer KRA PIN', s.kraPin?`<span class="mono">${esc(s.kraPin)}</span>`:'-'],
       ['Company KRA PIN', DATA.companyKraPin?`<span class="mono">${esc(DATA.companyKraPin)}</span>`:'Not set'],
-      ['Item', esc(s.crop)],
-      ['Quantity', `<span class="mono">${s.qty.toLocaleString()}</span> seedlings`],
-      ['Unit price', money(s.unitPrice)],
-      ['Total', `<b class="mono">${money(s.total)}</b>`],
+      ['Items', `<table style="width:100%;font-size:12px;">${saleItems(s).map(it=>`<tr><td>${esc(it.crop)}</td><td class="mono" style="text-align:right;white-space:nowrap;">${esc(itemQtyLabel(it))}</td><td class="mono" style="text-align:right;white-space:nowrap;">@ ${money(it.unitPrice)}</td><td class="mono" style="text-align:right;white-space:nowrap;">${money(it.total)}</td></tr>`).join('')}</table>`],
+      ['Total', `<b class="mono">${money(s.total)}</b>${s.vatAmount? ` <span class="small-muted">incl. VAT ${money(s.vatAmount)}</span>`:''}`],
       ['VAT treatment', st('green', s.vat)],
       ['Payment', esc(s.payment)],
       ['Served by', esc(s.servedBy)],
@@ -3066,13 +3146,18 @@ function downloadReceiptPDF(id){
       ['Customer', s.customer],
       ['Phone', s.phone||'-'],
       ['Customer KRA PIN', s.kraPin||'-'],
-      ['Item', s.crop],
-      ['Quantity', s.qty.toLocaleString()+' seedlings'],
-      ['Unit price', money(s.unitPrice)],
       ['Payment method', s.payment],
       ['VAT treatment', s.vat],
       ['Served by', s.servedBy],
     ],
+  });
+  y = doc.lastAutoTable.finalY + 4;
+  doc.autoTable({
+    startY: y, margin:{left:12, right:12},
+    styles:{fontSize:8.6, cellPadding:1.8},
+    headStyles:{fillColor:[38,53,42], textColor:255},
+    head:[['Item','Qty','Unit price','Total']],
+    body: saleItems(s).map(it=>[it.crop, itemQtyLabel(it), money(it.unitPrice), money(it.total)]),
   });
   y = doc.lastAutoTable.finalY + 6;
   doc.setDrawColor(200,210,196); doc.line(12, y, W-12, y); y += 9;
@@ -3090,7 +3175,7 @@ function downloadReceiptPDF(id){
 }
 function exportCashSalesExcel(){
   if(typeof XLSX==='undefined'){ toast('Excel library unavailable - check your connection.','err'); return; }
-  const rows = scopedSales().map(s=>({Receipt:s.receiptNo, Date:s.date, Customer:s.customer, Phone:s.phone, 'Customer KRA PIN':s.kraPin||'-', Item:s.crop, Qty:s.qty, 'Unit Price':s.unitPrice, 'Total (KES)':s.total, VAT:s.vat, Payment:s.payment, 'Served By':s.servedBy}));
+  const rows = scopedSales().flatMap(s=>saleItems(s).map(it=>({Receipt:s.receiptNo, Date:s.date, Customer:s.customer, Phone:s.phone, 'Customer KRA PIN':s.kraPin||'-', Item:it.crop, Qty:it.qty, Unit:it.unit||'seedlings', 'Unit Price':it.unitPrice, 'Line Total (KES)':it.total, 'Receipt Total (KES)':s.total, VAT:s.vat, 'VAT (KES)':s.vatAmount||0, Payment:s.payment, 'Served By':s.servedBy, Location:s.location||''})));
   if(!rows.length){ toast('No sales to export yet.','err'); return; }
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, excelSheet('Cash Sales Register', rows), 'Cash Sales');
@@ -3104,8 +3189,8 @@ function exportCashSalesPDF(){
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({orientation:'landscape'});
   const y0 = pdfLetterhead(doc, 'Cash Sales Register', 'Generated '+new Date().toLocaleString('en-KE')+' by '+CURRENT.name);
-  doc.autoTable({ startY:y0, head:[['Receipt','Date','Customer','KRA PIN','Item','Qty','Unit','Total','VAT','Payment','Served By']],
-    body: sales.map(s=>[s.receiptNo, fmtDate(s.date), s.customer, s.kraPin||'-', s.crop, s.qty.toLocaleString(), money(s.unitPrice), money(s.total), s.vat, s.payment, s.servedBy]),
+  doc.autoTable({ startY:y0, head:[['Receipt','Date','Customer','KRA PIN','Item','Qty','Unit price','Line total','Receipt total','VAT','Payment','Served By']],
+    body: sales.flatMap(s=>saleItems(s).map((it,ix)=>[ix===0? s.receiptNo : '', ix===0? fmtDate(s.date) : '', ix===0? s.customer : '', ix===0? (s.kraPin||'-') : '', it.crop, itemQtyLabel(it), money(it.unitPrice), money(it.total), ix===0? money(s.total) : '', ix===0? s.vat : '', ix===0? s.payment : '', ix===0? s.servedBy : ''])),
     styles:{fontSize:7.5}, headStyles:{fillColor:[49,92,58]} });
   doc.save(`SPN_Cash_Sales_${Date.now()}.pdf`);
   logActivity('Exported the cash sales register to PDF.');
@@ -3114,7 +3199,7 @@ function exportCashSalesPDF(){
    draw it down, and a batch can be closed (sold out / transplanted). Every reader
    (dashboard, pipeline, Seedling Stock, POS list, reports) uses batchRemaining(). */
 function batchViable(r){ return Math.round((+r.qty||0)*((+r.germinationPct||0)/100)); }
-function soldFromBatch(r){ return DATA.cashSales.filter(s=>s.batchId===r.id).reduce((a,s)=>a+(+s.qty||0),0); }
+function soldFromBatch(r){ return DATA.cashSales.reduce((a,s)=>a + saleItems(s).filter(it=>it.batchId===r.id).reduce((x,it)=>x+itemSeedlings(it),0), 0); }
 function batchRemaining(r){ if(r.closed) return 0; return Math.max(0, batchViable(r) - soldFromBatch(r)); }
 function readyBatches(){ return DATA.sowingRecords.filter(r=>computeStage(r).stage===4 && batchRemaining(r)>0); }
 function nextReceiptNo(){ const nums = DATA.cashSales.map(s=>parseInt(String(s.receiptNo||'').replace(/\D/g,''),10)).filter(n=>!isNaN(n)); return 'SPN-R-'+((nums.length? Math.max(...nums) : 1041)+1); }
@@ -3127,10 +3212,156 @@ function onSaleBatchChange(id){
   if(qty){ qty.max = left; if(+qty.value>left) qty.value = left; }
   if(hint) hint.textContent = `${left.toLocaleString()} seedlings left in ${r.batchCode} (${r.bay||'nursery'})`;
 }
+/* ---------------- price list ----------------
+   Managed product/commodity prices. Picking a product on a sale line fills its
+   unit and price, so nobody types prices for the same products every day.
+   Editable by Admin/MD and the Super User; everyone on the POS can view it. */
+const SALE_UNITS = ['seedlings','trays','kg','pcs','bags'];
+function priceListSorted(){ return (DATA.priceList||[]).slice().sort((a,b)=>String(a.name).localeCompare(String(b.name))); }
+function findPriceItem(name){
+  const q = (name||'').trim().toLowerCase(); if(!q) return null;
+  return (DATA.priceList||[]).find(p=>p.name.toLowerCase()===q)
+      || (DATA.priceList||[]).find(p=>q.includes(p.name.toLowerCase()) || p.name.toLowerCase().includes(q))
+      || null;
+}
+function openPriceListModal(){
+  const canEdit = canManage();
+  const rows = priceListSorted();
+  openModal('Price list', `
+    <p class="small-muted" style="margin:0 0 10px;">${canEdit? 'Products and their standing prices. The POS fills unit and price when a product is picked on a sale line.' : 'Reference prices set by the Admin/MD. The POS fills unit and price when a product is picked.'}</p>
+    <div class="table-scroll" style="max-height:330px;"><table><thead><tr><th>Product</th><th>Unit</th><th style="text-align:right;">Tray size</th><th style="text-align:right;">Price (KES)</th>${canEdit?'<th></th>':''}</tr></thead><tbody id="pl-rows">
+      ${rows.length? rows.map(p=>canEdit? `
+        <tr data-id="${esc(p.id)}">
+          <td><input value="${esc(p.name)}" data-f="name" style="min-width:150px;"></td>
+          <td><select data-f="unit">${SALE_UNITS.map(u=>`<option ${p.unit===u?'selected':''}>${u}</option>`).join('')}</select></td>
+          <td><input type="number" data-f="traySize" value="${p.traySize||''}" placeholder="-" min="1" style="width:72px;text-align:right;"></td>
+          <td><input type="number" data-f="price" value="${p.price}" min="0" step="any" style="width:92px;text-align:right;"></td>
+          <td><button type="button" class="btn sm ghost" title="Remove" onclick="this.closest('tr').remove()">×</button></td>
+        </tr>` : `
+        <tr><td>${esc(p.name)}</td><td>${esc(p.unit)}</td><td style="text-align:right;">${p.traySize||'-'}</td><td class="mono" style="text-align:right;">${money(p.price)}</td></tr>`).join('')
+      : `<tr><td colspan="${canEdit?5:4}" class="small-muted">No products yet${canEdit? ' - add the first one below':''}.</td></tr>`}
+    </tbody></table></div>
+    ${canEdit? `<button type="button" class="btn sm secondary" style="margin-top:10px;" onclick="addPriceListRow()">+ Add product</button>` : ''}
+  `, canEdit? [
+    {label:'Cancel', cls:'secondary', action:closeModal},
+    {label:'Save price list', cls:'leaf', action:savePriceList},
+  ] : [{label:'Close', cls:'secondary', action:closeModal}], {wide:true});
+}
+function addPriceListRow(){
+  const tb = document.getElementById('pl-rows'); if(!tb) return;
+  const empty = tb.querySelector('td[colspan]'); if(empty) empty.parentElement.remove();
+  const tr = document.createElement('tr'); tr.dataset.id = '';
+  tr.innerHTML = `<td><input data-f="name" placeholder="e.g. Tomato seedlings (tray of 66)" style="min-width:150px;"></td>
+    <td><select data-f="unit">${SALE_UNITS.map(u=>`<option>${u}</option>`).join('')}</select></td>
+    <td><input type="number" data-f="traySize" placeholder="-" min="1" style="width:72px;text-align:right;"></td>
+    <td><input type="number" data-f="price" min="0" step="any" style="width:92px;text-align:right;"></td>
+    <td><button type="button" class="btn sm ghost" title="Remove" onclick="this.closest('tr').remove()">×</button></td>`;
+  tb.appendChild(tr);
+}
+function savePriceList(){
+  if(!canManage()){ toast('Only Admin/MD or the Super User can edit the price list.','err'); return; }
+  const list = [];
+  document.querySelectorAll('#pl-rows tr[data-id]').forEach(tr=>{
+    const get = f => tr.querySelector(`[data-f="${f}"]`);
+    const name = get('name').value.trim(); if(!name) return;
+    const unit = get('unit').value;
+    list.push({id: tr.dataset.id || uid('pl'), name, unit, traySize: unit==='trays'? (+get('traySize').value||null) : null, price: +get('price').value||0, updatedAt: Date.now(), updatedBy: CURRENT.name});
+  });
+  DATA.priceList = list;
+  logActivity(`Updated the price list (${list.length} products).`);
+  saveData(); closeModal(); toast('Price list saved.');
+  if(document.getElementById('view-root').dataset.view==='cashsale') renderCashSale(document.getElementById('view-root'));
+}
+
+/* ---------------- multi-item cash sale ----------------
+   A sale carries any number of lines (tomato seedlings + maize + pawpaw to one
+   buyer). Each line is a price-list product, a nursery batch (drawn from stock)
+   or free text, in seedlings, trays (with tray size), kg, pcs or bags. Older
+   single-item sales keep working through saleItems(). */
+function saleItems(s){
+  if(Array.isArray(s.items) && s.items.length) return s.items;
+  return [{crop:s.crop, qty:+s.qty||0, unit:s.unit||'seedlings', traySize:null, seedlings:+s.qty||0, unitPrice:+s.unitPrice||0, total:+s.total||0, batchId:s.batchId||null, batchCode:s.batchCode||null}];
+}
+function itemSeedlings(it){ return it.seedlings!=null? +it.seedlings||0 : (it.unit==='trays'? (+it.qty||0)*(+it.traySize||0) : (it.unit==='seedlings'||!it.unit? +it.qty||0 : 0)); }
+function itemQtyLabel(it){
+  if(it.unit==='trays') return `${(+it.qty||0).toLocaleString()} tray${+it.qty===1?'':'s'}${it.traySize? ' × '+it.traySize : ''}`;
+  return `${(+it.qty||0).toLocaleString()} ${it.unit||'seedlings'}`;
+}
+function saleSummary(s){ const its = saleItems(s); return its.length===1? its[0].crop : `${its[0].crop} + ${its.length-1} more`; }
+function saleQtyTotal(s){ return saleItems(s).reduce((a,it)=>a+(+it.qty||0),0); }
+function saleSeedlingsTotal(s){ return saleItems(s).reduce((a,it)=>a+itemSeedlings(it),0); }
+let SALE_DRAFT = [];
+function newSaleRow(batchId){
+  const r = batchId ? DATA.sowingRecords.find(x=>x.id===batchId) : null;
+  const pl = r ? findPriceItem(r.crop) : null;
+  return { product: r? `${r.crop} ${r.variety} · ${r.batchCode}` : '', batchId: r? r.id : null, unit: (pl&&pl.unit)||'seedlings', traySize: (pl&&pl.traySize)||66, qty: r? 100 : 1, unitPrice: pl? pl.price : 0 };
+}
+function saleRowSeedlings(row){ return row.unit==='trays'? (+row.qty||0)*(+row.traySize||0) : (+row.qty||0); }
+function saleDraftTotal(){ return SALE_DRAFT.reduce((a,r)=>a+Math.round((+r.qty||0)*(+r.unitPrice||0)),0); }
+function renderSaleItems(){
+  const host = document.getElementById('sale-items'); if(!host) return;
+  const batches = readyBatches();
+  host.innerHTML = `
+    <datalist id="sale-prod-list">${batches.map(r=>`<option value="${esc(`${r.crop} ${r.variety} · ${r.batchCode}`)}">`).join('')}${priceListSorted().map(p=>`<option value="${esc(p.name)}">`).join('')}</datalist>
+    <div class="table-scroll"><table><thead><tr><th style="min-width:190px;">Item (product, batch or free text)</th><th>Unit</th><th style="width:80px;">Qty</th><th style="width:80px;">Tray size</th><th style="width:96px;">Unit price</th><th style="text-align:right;">Line total</th><th></th></tr></thead><tbody>
+      ${SALE_DRAFT.map((row,i)=>{
+        const batch = row.batchId? DATA.sowingRecords.find(x=>x.id===row.batchId) : null;
+        return `<tr>
+          <td><input list="sale-prod-list" value="${esc(row.product)}" oninput="updSaleRow(${i},'product',this.value)" placeholder="Type or pick">${batch? `<div class="cell-sub">${batchRemaining(batch).toLocaleString()} seedlings left in ${esc(batch.batchCode)}</div>` : ''}</td>
+          <td><select onchange="updSaleRow(${i},'unit',this.value)">${SALE_UNITS.map(u=>`<option ${row.unit===u?'selected':''}>${u}</option>`).join('')}</select></td>
+          <td><input type="number" min="0" step="any" value="${row.qty}" oninput="updSaleRow(${i},'qty',this.value)"></td>
+          <td>${row.unit==='trays'? `<input type="number" min="1" value="${row.traySize||''}" title="Seedlings per tray" oninput="updSaleRow(${i},'traySize',this.value)">` : '<span class="small-muted">-</span>'}</td>
+          <td><input type="number" min="0" step="any" value="${row.unitPrice}" oninput="updSaleRow(${i},'unitPrice',this.value)"></td>
+          <td class="mono" style="text-align:right;white-space:nowrap;">${money(Math.round((+row.qty||0)*(+row.unitPrice||0)))}</td>
+          <td>${SALE_DRAFT.length>1? `<button type="button" class="btn sm ghost" title="Remove line" onclick="rmSaleRow(${i})">×</button>`:''}</td>
+        </tr>`;
+      }).join('')}
+    </tbody></table></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;gap:10px;flex-wrap:wrap;">
+      <button type="button" class="btn sm secondary" onclick="addSaleRow()">+ Add item</button>
+      <div style="font-size:13.5px;">Total: <b class="mono" id="sale-total">${money(saleDraftTotal())}</b></div>
+    </div>`;
+}
+function addSaleRow(){ SALE_DRAFT.push(newSaleRow()); renderSaleItems(); }
+function rmSaleRow(i){ SALE_DRAFT.splice(i,1); renderSaleItems(); }
+function updSaleRow(i, f, v){
+  const row = SALE_DRAFT[i]; if(!row) return;
+  if(f==='product'){
+    row.product = v;
+    const t = v.trim();
+    const b = readyBatches().find(r=>`${r.crop} ${r.variety} · ${r.batchCode}`===t || (r.batchCode && t.includes(r.batchCode)));
+    const changedBatch = (b? b.id : null) !== row.batchId;
+    row.batchId = b? b.id : null;
+    /* price and unit apply only on a definite pick (exact price-list name or a batch),
+       never on partial typing, and the table re-renders only when something else on
+       the row actually changed - typing free text must never lose the caret */
+    const pl = t.length>=3 ? findPriceItem(b? b.crop : t) : null;
+    const exact = !!pl && (!!b || pl.name.toLowerCase()===t.toLowerCase());
+    if(exact){
+      if(pl.unit==='trays' && row.unit!=='trays') row.qty = 1;
+      row.unit = pl.unit;
+      if(pl.unit==='trays' && pl.traySize) row.traySize = pl.traySize;
+      if(pl.price) row.unitPrice = pl.price;
+    }
+    if(changedBatch || exact){
+      const caret = document.activeElement && document.activeElement.selectionStart;
+      renderSaleItems();
+      const again = document.querySelectorAll('#sale-items tbody tr')[i]?.querySelector('input[list]');
+      if(again){ again.focus(); try{ again.setSelectionRange(caret, caret); }catch(e){} }
+    }
+    return;
+  }
+  if(f==='unit'){ row.unit = v; renderSaleItems(); return; }
+  row[f] = v==='' ? '' : +v;
+  const host = document.getElementById('sale-items'); const tr = host && host.querySelectorAll('tbody tr')[i];
+  if(tr) tr.children[5].textContent = money(Math.round((+row.qty||0)*(+row.unitPrice||0)));
+  const tot = document.getElementById('sale-total'); if(tot) tot.textContent = money(saleDraftTotal());
+}
 function openSaleModal(batchId){
   const nextNo = nextReceiptNo();
   const readyLines = readyBatches();
-  const preset = batchId && readyLines.find(r=>r.id===batchId) ? batchId : (readyLines[0]? readyLines[0].id : '');
+  const preset = (batchId && readyLines.find(r=>r.id===batchId)) ? batchId : (readyLines[0]? readyLines[0].id : null);
+  SALE_DRAFT = [ newSaleRow(preset) ];
   openModal('New Cash Sale', `
     <div class="form-grid">
       <div class="field"><label>Receipt No</label><input class="mono" id="f-receipt" value="${nextNo}" readonly></div>
@@ -3142,49 +3373,60 @@ function openSaleModal(batchId){
       <div class="field field-full"><label>Customer Location <span class="small-muted">(type it, or use GPS below)</span></label><input id="f-location" placeholder="e.g. Mogotio Town, near..."></div>
       <div class="field"><label>Customer GPS <span class="small-muted">(optional - for follow-up route planning)</span></label><input id="f-gps" readonly placeholder="Tap 'Capture location'"></div>
       <div class="field" style="justify-content:flex-end;"><button type="button" class="btn secondary sm" onclick="captureCashSaleGPS()">📍 Capture GPS</button></div>
-      <div class="field field-full"><label>Nursery batch <span class="small-muted">(draws the seedlings from stock)</span></label>
-        <select id="f-batch" onchange="onSaleBatchChange(this.value)">
-          <option value="">- Not from a batch (other produce) -</option>
-          ${readyLines.map(r=>`<option value="${r.id}" ${r.id===preset?'selected':''}>${esc(r.crop+' '+r.variety)} · ${esc(r.batchCode)} · ${batchRemaining(r).toLocaleString()} left</option>`).join('')}
-        </select>
-        <small id="f-batch-hint">${preset? '' : 'No ready batches in stock right now: type the crop/variety sold.'}</small></div>
-      <div class="field field-full"><label>Crop / Variety <span class="req">*</span></label>
-        <input id="f-crop" list="cashsale-crop-list" placeholder="Type or pick from inventory" value="${preset? esc(readyLines.find(r=>r.id===preset).crop+' '+readyLines.find(r=>r.id===preset).variety) : ''}">
-        <datalist id="cashsale-crop-list">${readyLines.map(s=>`<option value="${esc(s.crop+' '+s.variety)}">`).join('')}</datalist></div>
-      <div class="field"><label>Quantity <span class="req">*</span></label><input type="number" id="f-qty" value="100" min="1" ${preset? 'max="'+batchRemaining(readyLines.find(r=>r.id===preset))+'"' : ''}></div>
-      <div class="field"><label>Unit Price (KES)</label><input type="number" id="f-price" value="6" min="0"></div>
+    </div>
+    <div class="section-title">Items <span class="small-muted" style="font-weight:400;text-transform:none;letter-spacing:0;">· seedling and tray lines from a batch draw the nursery stock down</span><div class="line"></div></div>
+    <div id="sale-items"></div>
+    <div class="form-grid" style="margin-top:12px;">
       <div class="field"><label>VAT Treatment</label><select id="f-vat"><option>Exempt - agricultural produce</option><option>Zero-rated</option><option>Standard 16%</option></select></div>
-      <div class="field"><label>Assign Agronomist for follow-up <span class="small-muted">(optional)</span></label><select id="f-agronomist"><option value="">- None -</option>${DATA.users.filter(u=>u.role==='Agronomist').map(u=>`<option>${esc(u.name)}</option>`).join('')}</select></div>
+      <div class="field"><label>Assign Agronomist for follow-up <span class="small-muted">(optional)</span></label><select id="f-agronomist"><option value="">- None -</option>${DATA.users.filter(u=>u.role==='Agronomist' && isActiveUser(u)).map(u=>`<option>${esc(u.name)}</option>`).join('')}</select></div>
     </div>
   `, [
     {label:'Cancel', cls:'secondary', action:closeModal},
     {label:'Record Sale', cls:'leaf', action:()=>{
-      const cust=document.getElementById('f-cust').value.trim();
-      const qty=+document.getElementById('f-qty').value;
-      const price=+document.getElementById('f-price').value;
-      const crop=document.getElementById('f-crop').value.trim();
-      if(!cust||!qty||!crop){toast('Customer name, crop/variety and quantity are required.','err');return;}
-      const batchSel = document.getElementById('f-batch');
-      const batch = (batchSel && batchSel.value) ? DATA.sowingRecords.find(r=>r.id===batchSel.value) : null;
-      if(batch && qty > batchRemaining(batch)){ toast(`Only ${batchRemaining(batch).toLocaleString()} seedlings left in batch ${batch.batchCode}.`,'err'); return; }
+      const cust = document.getElementById('f-cust').value.trim();
+      if(!cust){ toast('Customer name is required.','err'); return; }
+      const rows = SALE_DRAFT.filter(r=>(r.product||'').trim() && (+r.qty||0)>0);
+      if(!rows.length){ toast('Add at least one item with a quantity.','err'); return; }
+      const perBatch = {};
+      for(const r of rows){
+        if(r.unit==='trays' && !(+r.traySize>0)){ toast(`Enter the tray size (seedlings per tray) for "${r.product}".`,'err'); return; }
+        if(r.batchId){
+          if(r.unit!=='trays' && r.unit!=='seedlings'){ toast(`Batch lines are sold in seedlings or trays ("${r.product}").`,'err'); return; }
+          perBatch[r.batchId] = (perBatch[r.batchId]||0) + saleRowSeedlings(r);
+        }
+      }
+      for(const bid of Object.keys(perBatch)){
+        const b = DATA.sowingRecords.find(x=>x.id===bid);
+        if(b && perBatch[bid] > batchRemaining(b)){ toast(`Only ${batchRemaining(b).toLocaleString()} seedlings left in batch ${b.batchCode}.`,'err'); return; }
+      }
+      const items = rows.map(r=>{
+        const b = r.batchId? DATA.sowingRecords.find(x=>x.id===r.batchId) : null;
+        return { crop: r.product.trim(), qty:+r.qty, unit:r.unit, traySize: r.unit==='trays'? +r.traySize||null : null,
+          seedlings: (r.batchId || r.unit==='seedlings' || r.unit==='trays')? saleRowSeedlings(r) : null,
+          unitPrice:+r.unitPrice||0, total: Math.round((+r.qty||0)*(+r.unitPrice||0)), batchId: r.batchId||null, batchCode: b? b.batchCode : null };
+      });
+      const total = items.reduce((a,it)=>a+it.total,0);
       const gpsVal = document.getElementById('f-gps').value.split(',').map(s=>parseFloat(s));
       const hasGps = gpsVal.length===2 && !isNaN(gpsVal[0]) && !isNaN(gpsVal[1]);
-      const newSaleId = uid('cs');
       const vatTreatment = document.getElementById('f-vat').value;
-      const vatAmount = vatTreatment==='Standard 16%' ? Math.round((qty*price) - (qty*price)/1.16) : 0; /* prices are VAT-inclusive at the POS */
+      const vatAmount = vatTreatment==='Standard 16%' ? Math.round(total - total/1.16) : 0; /* prices are VAT-inclusive at the POS */
+      const newSaleId = uid('cs');
       DATA.cashSales.push({id:newSaleId, receiptNo:document.getElementById('f-receipt').value, date:document.getElementById('f-date').value || todayISO(),
         customer:cust, phone:document.getElementById('f-phone').value, kraPin:document.getElementById('f-pin').value,
-        location:document.getElementById('f-location').value||'', crop, qty, unitPrice:price, total:qty*price, vatAmount,
-        batchId: batch? batch.id : null, batchCode: batch? batch.batchCode : null,
-        vat:document.getElementById('f-vat').value, payment:document.getElementById('f-pay').value, servedBy:CURRENT.name,
+        location:document.getElementById('f-location').value||'',
+        items, crop: items.map(it=>it.crop).join(', ').slice(0,140), qty: items.reduce((a,it)=>a+(it.seedlings!=null? it.seedlings : it.qty),0),
+        unitPrice: items.length===1? items[0].unitPrice : null, total, vatAmount,
+        vat:vatTreatment, payment:document.getElementById('f-pay').value, servedBy:CURRENT.name,
         assignedAgronomist:document.getElementById('f-agronomist').value||null,
         customerLat: hasGps?gpsVal[0]:null, customerLng: hasGps?gpsVal[1]:null});
-      logActivity(`Recorded cash sale ${document.getElementById('f-receipt').value} for ${cust} (${money(qty*price)}).`);
+      logActivity(`Recorded cash sale ${document.getElementById('f-receipt').value} for ${cust} (${items.length} item${items.length===1?'':'s'}, ${money(total)}).`);
       closeModal(); renderCashSale(document.getElementById('view-root')); toast('Sale recorded.');
       setTimeout(()=>openSaleDrawer(newSaleId), 150);
     }}
-  ]);
+  ], {wide:true});
+  renderSaleItems();
 }
+
 function captureCashSaleGPS(){
   if(!navigator.geolocation){toast('Geolocation not available in this browser.','err');return;}
   toast('Requesting device location…');
@@ -3294,7 +3536,7 @@ function openLeadModal(){
       <div class="field"><label>GPS Coordinates <span class="small-muted">(with altitude)</span></label><input id="l-gps" readonly placeholder="Tap 'Use my location'"></div>
       <div class="field" style="justify-content:flex-end;"><button type="button" class="btn secondary sm" onclick="captureGPS()">📍 Use my location</button></div>
       <div class="field field-full"><label>Interest / Order details</label><input id="l-interest" placeholder="e.g. Tomato Zara F1 - 2 acres"></div>
-      <div class="field"><label>Assign to Agronomist / Sales</label><select id="l-assign">${DATA.users.filter(u=>u.role==='Agronomist'||u.role==='Sales').map(u=>`<option ${u.name===CURRENT.name?'selected':''}>${esc(u.name)}</option>`).join('')}</select></div>
+      <div class="field"><label>Assign to Agronomist / Sales</label><select id="l-assign">${DATA.users.filter(u=>(u.role==='Agronomist'||u.role==='Sales') && isActiveUser(u)).map(u=>`<option ${u.name===CURRENT.name?'selected':''}>${esc(u.name)}</option>`).join('')}</select></div>
       <div class="field"><label>Follow-up Date</label><input type="date" id="l-followup" value="${addDays(3)}"></div>
     </div>
   `, [
@@ -3539,7 +3781,7 @@ function computeClients(){
     const key = (s.customer||'Unknown').trim().toLowerCase()+'|'+(s.phone||'');
     if(!map[key]) map[key] = {name:s.customer, phone:s.phone||'', txns:0, qty:0, total:0, lastTs:0, lastDate:null, firstDate:null, sales:[]};
     const c = map[key];
-    c.txns++; c.qty += s.qty; c.total += s.total;
+    c.txns++; c.qty += saleSeedlingsTotal(s); c.total += s.total;
     if(s.date){
       /* dates stay YYYY-MM-DD strings end to end (a UTC roundtrip shifts a day
          in UTC+3); the timestamp only feeds the recency score */
@@ -3638,10 +3880,10 @@ function clientStatement(id, fmt){
   const sales = c.sales.filter(s=>s.date>=from && s.date<=to).sort((a,b)=>a.date<b.date?-1:1);
   if(!sales.length){ toast('No transactions for this client in the selected period.','err'); return; }
   const total = sales.reduce((a,b)=>a+b.total,0);
-  const qty = sales.reduce((a,b)=>a+b.qty,0);
+  const qty = sales.reduce((a,b)=>a+saleSeedlingsTotal(b),0);
   if(fmt==='excel'){
     if(typeof XLSX==='undefined'){ toast('Excel library unavailable - check your connection.','err'); return; }
-    const rows = sales.map(s=>({Date:fmtDate(s.date), Receipt:s.receiptNo, Item:s.crop, Qty:s.qty, 'Unit Price':s.unitPrice, 'Total (KES)':s.total, Payment:s.payment}));
+    const rows = sales.flatMap(s=>saleItems(s).map((it,ix)=>({Date:ix===0? fmtDate(s.date):'', Receipt:ix===0? s.receiptNo:'', Item:it.crop, Qty:itemQtyLabel(it), 'Unit Price':it.unitPrice, 'Line Total (KES)':it.total, 'Receipt Total (KES)':ix===0? s.total:'', Payment:ix===0? s.payment:''})));
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, excelSheet('Client Statement · '+c.name+' · '+fmtDate(from)+' to '+fmtDate(to), rows), 'Statement');
     XLSX.writeFile(wb, `SPN_Statement_${c.name.replace(/[^A-Za-z0-9]+/g,'_')}_${Date.now()}.xlsx`);
@@ -3656,7 +3898,7 @@ function clientStatement(id, fmt){
     doc.text((c.phone? 'Phone: '+c.phone+' · ':'')+sales.length+' transaction(s) in this period', 14, y+5);
     doc.setTextColor(0);
     doc.autoTable({ startY:y+9, head:[['Date','Receipt','Item','Qty','Unit Price','Total','Payment']],
-      body: sales.map(s=>[fmtDate(s.date), s.receiptNo, s.crop, s.qty.toLocaleString(), money(s.unitPrice), money(s.total), s.payment]),
+      body: sales.flatMap(s=>saleItems(s).map((it,ix)=>[ix===0? fmtDate(s.date):'', ix===0? s.receiptNo:'', it.crop, itemQtyLabel(it), money(it.unitPrice), money(it.total), ix===0? s.payment:''])),
       styles:{fontSize:8}, headStyles:{fillColor:[49,92,58]} });
     let fy = doc.lastAutoTable.finalY + 9;
     doc.setFont(undefined,'bold'); doc.setFontSize(11); doc.setTextColor(38,53,42);
@@ -3678,7 +3920,7 @@ function renderCashSalesAnalysis(){
   const totalRevenue = sales.reduce((a,b)=>a+b.total,0);
   const totalQty = sales.reduce((a,b)=>a+b.qty,0);
   const byCrop = {};
-  sales.forEach(s=>{ const c=matchSalesCrop(s.crop)||s.crop; byCrop[c]=(byCrop[c]||0)+s.qty; });
+  sales.forEach(s=>saleItems(s).forEach(it=>{ const c=matchSalesCrop(it.crop)||it.crop; byCrop[c]=(byCrop[c]||0)+(it.seedlings!=null? it.seedlings : it.qty); }));
   const topCrop = Object.entries(byCrop).sort((a,b)=>b[1]-a[1])[0];
   const byPayment = {};
   sales.forEach(s=>{ byPayment[s.payment]=(byPayment[s.payment]||0)+1; });
@@ -3750,13 +3992,15 @@ function matchSalesCrop(line){
 function realSalesByMonth(){
   const map = {};
   DATA.cashSales.forEach(s=>{
-    const crop = matchSalesCrop(s.crop);
-    if(!crop) return;
     const d = new Date(s.date+'T00:00:00');
-    const key = `${crop}|${d.getFullYear()}|${d.getMonth()+1}`;
-    if(!map[key]) map[key] = {crop, year:d.getFullYear(), month:d.getMonth()+1, qty:0, revenue:0};
-    map[key].qty += s.qty;
-    map[key].revenue += s.total;
+    saleItems(s).forEach(it=>{
+      const crop = matchSalesCrop(it.crop);
+      if(!crop) return;
+      const key = `${crop}|${d.getFullYear()}|${d.getMonth()+1}`;
+      if(!map[key]) map[key] = {crop, year:d.getFullYear(), month:d.getMonth()+1, qty:0, revenue:0};
+      map[key].qty += (it.seedlings!=null? it.seedlings : it.qty);
+      map[key].revenue += it.total;
+    });
   });
   return Object.values(map);
 }
@@ -3959,7 +4203,7 @@ function openSeedLotModal(editId){
       <div class="field"><label>Crop <span class="req">*</span></label><input id="sl-crop" list="crop-list-sl" value="${rec?esc(rec.crop):''}" placeholder="Type or pick"><datalist id="crop-list-sl">${COMMON_CROPS.map(c=>`<option value="${c}">`).join('')}</datalist></div>
       <div class="field"><label>Variety <span class="req">*</span></label><input id="sl-variety" value="${rec?esc(rec.variety||''):''}" placeholder="e.g. Zara F1"></div>
       <div class="field"><label>Seed lot no.</label><input class="mono" id="sl-lot" value="${rec?esc(rec.lotNo||''):''}" placeholder="e.g. ZF1-2507-K"></div>
-      <div class="field"><label>Supplier / source</label><input id="sl-supplier" value="${rec?esc(rec.supplier||''):''}" placeholder="e.g. Kenya Seed Co."></div>
+      <div class="field"><label>Supplier / source</label><input id="sl-supplier" list="supplier-datalist-2" value="${rec?esc(rec.supplier||''):''}" placeholder="e.g. Kenya Seed Co."><datalist id="supplier-datalist-2">${(DATA.suppliers||[]).map(s=>`<option value="${esc(s.name)}">`).join('')}</datalist></div>
       <div class="field"><label>KEPHIS certificate no.</label><input class="mono" id="sl-cert" value="${rec?esc(rec.certNo||''):''}" placeholder="KEPHIS/..."></div>
       <div class="field"><label>Seed class</label><select id="sl-class">${['F1','OPV','Tree','Fruit'].map(c=>`<option ${rec&&rec.seedClass===c?'selected':''}>${c}</option>`).join('')}</select></div>
       <div class="field"><label>${rec? 'Quantity on hand' : 'Quantity received'} <span class="req">*</span></label><input type="number" id="sl-qty" min="0" step="any" value="${rec? (+rec.qty||0) : ''}"></div>
@@ -4173,7 +4417,7 @@ function openSowingModal(presetLotId){
       <div class="field"><label style="font-size:10.8px;">Ready Days <span class="req">*</span></label><input type="number" id="sw-ready" style="padding:6px 8px;" value="30" min="1"></div>
       <div class="field"><label style="font-size:10.8px;">Greenhouse / Bay</label><input id="sw-bay" style="padding:6px 8px;" placeholder="e.g. Greenhouse A"></div>
       <div class="field"><label style="font-size:10.8px;">Germination %</label><input type="number" id="sw-germ" style="padding:6px 8px;" value="95" min="0" max="100"></div>
-      <div class="field field-full"><label style="font-size:10.8px;">Sown By</label><select id="sw-by" style="padding:6px 8px;">${(()=>{ const names=[...new Set([CURRENT.name, ...DATA.users.filter(u=>(u.status||'Active')!=='Pending').map(u=>u.name), ...DATA.staff.map(s=>s.name)].filter(Boolean))]; return names.map(n=>`<option ${n===CURRENT.name?'selected':''}>${esc(n)}</option>`).join(''); })()}</select></div>
+      <div class="field field-full"><label style="font-size:10.8px;">Sown By</label><select id="sw-by" style="padding:6px 8px;">${(()=>{ const names=[...new Set([CURRENT.name, ...DATA.users.filter(isActiveUser).map(u=>u.name), ...DATA.staff.map(s=>s.name)].filter(Boolean))]; return names.map(n=>`<option ${n===CURRENT.name?'selected':''}>${esc(n)}</option>`).join(''); })()}</select></div>
     </div>
   `, [
     {label:'Cancel', cls:'secondary', action:closeModal},
@@ -4530,8 +4774,8 @@ function openHerdModal(editId){
   const rec = editId ? (DATA.livestockInventory||[]).find(a=>a.id===editId) : null;
   openModal(rec? 'Edit livestock record' : 'Add animal / flock', `
     <div class="form-grid">
-      <div class="field"><label>Tag / Name <span class="req">*</span></label><input class="mono" id="hd-tag" value="${rec?esc(rec.tag):''}" placeholder="e.g. COW-003 or FLOCK-B"></div>
-      <div class="field"><label>Species</label><select id="hd-species">${Object.keys(LIVESTOCK_SPECIES).map(k=>`<option value="${k}" ${rec&&rec.species===k?'selected':''}>${SPECIES_LABEL(k)}</option>`).join('')}<option value="other" ${rec&&rec.species==='other'?'selected':''}>Other</option></select></div>
+      <div class="field"><label>Tag / Name <span class="req">*</span></label>${(()=>{ const t = rec? rec.tag : nextHerdTag(Object.keys(LIVESTOCK_SPECIES)[0]); return `<input class="mono" id="hd-tag" value="${esc(t)}" data-auto="${esc(t)}"`; })()} placeholder="e.g. COW-003 or FLOCK-B"></div>
+      <div class="field"><label>Species</label><select id="hd-species" onchange="onHerdSpeciesChange(this.value)">${Object.keys(LIVESTOCK_SPECIES).map(k=>`<option value="${k}" ${rec&&rec.species===k?'selected':''}>${SPECIES_LABEL(k)}</option>`).join('')}<option value="other" ${rec&&rec.species==='other'?'selected':''}>Other</option></select></div>
       <div class="field"><label>Breed</label><input id="hd-breed" value="${rec?esc(rec.breed||''):''}" placeholder="e.g. Friesian, Dorper, ISA Brown"></div>
       <div class="field"><label>Sex</label><select id="hd-sex">${['Female','Male','Mixed flock'].map(sx=>`<option ${rec&&rec.sex===sx?'selected':''}>${sx}</option>`).join('')}</select></div>
       <div class="field"><label>Date of birth / hatch</label><input type="date" id="hd-dob" value="${rec&&rec.dob?rec.dob:''}"></div>
@@ -4825,6 +5069,119 @@ function approvePR(id){
   const p=DATA.procurement.find(x=>x.id===id);
   if(p){p.status='Approved - PO Issued'; logActivity(`Approved PR ${p.prNo} - PO issued to ${p.supplier}.`); saveData(); if(document.querySelector('.sb-item.active')?.dataset.key==='procurement'){ renderProcurement(document.getElementById('view-root')); } else { renderDashboard(document.getElementById('view-root')); } toast('Purchase order issued.');}
 }
+/* =========================================================
+   VENDORS & SUPPLIERS - register of everyone the nursery buys from.
+   Purchase requests and seed lots pick from this list; the drawer shows a
+   supplier's linked PRs and seed lots.
+========================================================= */
+const SUPPLIER_CATEGORIES = ['Seeds','Agrochemicals','Fertiliser','Packaging & trays','Equipment','Transport','Animal feeds','Veterinary','Casual services','Other'];
+function renderSuppliers(root){
+  DATA.suppliers = DATA.suppliers || [];
+  const linkedPRs = s => DATA.procurement.filter(p=>(p.supplier||'').trim().toLowerCase()===s.name.trim().toLowerCase());
+  root.innerHTML = `
+  <div class="view-header"><div><h2>Vendors & Suppliers</h2><p>Who the nursery buys from: contacts, category, KRA PIN and payment terms. Purchase requests and seed lots pick suppliers from this register.</p></div>
+  <button class="btn" onclick="openSupplierModal()">+ Register supplier</button></div>
+  <div class="grid cols-3" style="margin-bottom:16px;">
+    ${kpi('Suppliers', DATA.suppliers.length, [...new Set(DATA.suppliers.map(s=>s.category))].length+' categories', 'supplier')}
+    ${kpi('With KRA PIN', DATA.suppliers.filter(s=>s.kraPin).length+' / '+DATA.suppliers.length, 'for withholding/VAT records', 'access')}
+    ${kpi('Linked purchase requests', DATA.procurement.filter(p=>DATA.suppliers.some(s=>s.name.trim().toLowerCase()===(p.supplier||'').trim().toLowerCase())).length, 'of '+DATA.procurement.length+' PRs name a registered supplier', 'procure')}
+  </div>
+  ${dataTable('suppliers', {
+    searchLabel:'suppliers',
+    sortKey:'name', sortDir:1,
+    rows: DATA.suppliers.slice(),
+    onRowClick:'openSupplierDrawer',
+    emptyTitle:'No suppliers registered', emptyText:'Register the first vendor with the button above.',
+    columns:[
+      {key:'name', label:'Supplier', val:s=>s.name, html:s=>`<div class="cell-main">${esc(s.name)}</div>${s.contact? `<div class="cell-sub">${esc(s.contact)}</div>`:''}`},
+      {key:'category', label:'Category', val:s=>s.category||'', html:s=>st('gold', s.category||'Other')},
+      {key:'phone', label:'Phone', val:s=>s.phone||'', html:s=>`<span class="mono">${esc(s.phone||'-')}</span>`},
+      {key:'email', label:'Email', val:s=>s.email||''},
+      {key:'location', label:'Location', val:s=>s.location||''},
+      {key:'kraPin', label:'KRA PIN', val:s=>s.kraPin||'', html:s=>s.kraPin? `<span class="mono">${esc(s.kraPin)}</span>` : '<span class="small-muted">-</span>'},
+      {key:'terms', label:'Terms', val:s=>s.terms||'', html:s=>esc(s.terms||'-')},
+      {key:'prs', label:'PRs', align:'right', val:s=>linkedPRs(s).length, html:s=>`<span class="mono">${linkedPRs(s).length}</span>`},
+    ],
+  })}`;
+}
+function openSupplierModal(editId){
+  const rec = editId ? (DATA.suppliers||[]).find(s=>s.id===editId) : null;
+  openModal(rec? 'Edit supplier' : 'Register supplier', `
+    <div class="form-grid">
+      <div class="field"><label>Supplier / vendor name <span class="req">*</span></label><input id="sp-name" value="${rec?esc(rec.name):''}" placeholder="e.g. Kenya Seed Co."></div>
+      <div class="field"><label>Category</label><select id="sp-cat">${SUPPLIER_CATEGORIES.map(c=>`<option ${rec&&rec.category===c?'selected':''}>${c}</option>`).join('')}</select></div>
+      <div class="field"><label>Contact person</label><input id="sp-contact" value="${rec?esc(rec.contact||''):''}"></div>
+      <div class="field"><label>Phone</label><input id="sp-phone" value="${rec?esc(rec.phone||''):''}" placeholder="07XXXXXXXX"></div>
+      <div class="field"><label>Email</label><input id="sp-email" type="email" value="${rec?esc(rec.email||''):''}"></div>
+      <div class="field"><label>KRA PIN</label><input class="mono" id="sp-pin" value="${rec?esc(rec.kraPin||''):''}" placeholder="P0XXXXXXXXX"></div>
+      <div class="field field-full"><label>Location</label><input id="sp-location" data-place value="${rec?esc(rec.location||''):''}" placeholder="town / area"></div>
+      <div class="field"><label>Payment terms</label><select id="sp-terms">${['Cash on delivery','7 days','14 days','30 days','Prepaid','M-Pesa on order'].map(t=>`<option ${rec&&rec.terms===t?'selected':''}>${t}</option>`).join('')}</select></div>
+      <div class="field field-full"><label>Notes</label><input id="sp-notes" value="${rec?esc(rec.notes||''):''}" placeholder="e.g. delivers Tuesdays, minimum order 10 bags"></div>
+    </div>
+  `, [
+    {label:'Cancel', cls:'secondary', action:closeModal},
+    {label: rec? 'Save changes' : 'Register supplier', cls:'leaf', action:()=>{
+      const name = document.getElementById('sp-name').value.trim();
+      if(!name){ toast('The supplier name is required.','err'); return; }
+      const payload = { name, category:document.getElementById('sp-cat').value, contact:document.getElementById('sp-contact').value.trim(),
+        phone:document.getElementById('sp-phone').value.trim(), email:document.getElementById('sp-email').value.trim(),
+        kraPin:document.getElementById('sp-pin').value.trim(), location:document.getElementById('sp-location').value.trim(),
+        terms:document.getElementById('sp-terms').value, notes:document.getElementById('sp-notes').value.trim() };
+      DATA.suppliers = DATA.suppliers || [];
+      if(rec){ Object.assign(rec, payload); logActivity(`Updated supplier ${name}.`); }
+      else { DATA.suppliers.push(Object.assign({id:uid('sp'), createdAt:Date.now(), createdBy:CURRENT.name}, payload)); logActivity(`Registered supplier ${name} (${payload.category}).`); }
+      saveData(); closeModal();
+      if(document.getElementById('view-root').dataset.view==='suppliers') renderSuppliers(document.getElementById('view-root'));
+      toast(rec? 'Supplier updated.' : 'Supplier registered.');
+    }}
+  ]);
+}
+function openSupplierDrawer(id){
+  const s = (DATA.suppliers||[]).find(x=>x.id===id); if(!s) return;
+  const prs = DATA.procurement.filter(p=>(p.supplier||'').trim().toLowerCase()===s.name.trim().toLowerCase());
+  const lots = (DATA.seedInventory||[]).filter(l=>(l.supplier||'').trim().toLowerCase()===s.name.trim().toLowerCase());
+  openDrawer(esc(s.name), st('gold', s.category||'Other'), `
+    ${specList([
+      ['Contact person', esc(s.contact||'')||'-'],
+      ['Phone', s.phone? `<span class="mono">${esc(s.phone)}</span>` : '-'],
+      ['Email', esc(s.email||'')||'-'],
+      ['Location', esc(s.location||'')||'-'],
+      ['KRA PIN', s.kraPin? `<span class="mono">${esc(s.kraPin)}</span>` : '-'],
+      ['Payment terms', esc(s.terms||'')||'-'],
+      ['Notes', esc(s.notes||'')||'-'],
+      ['Purchase requests', prs.length? `${prs.length} · ${money(prs.reduce((a,p)=>a+(p.estCost||0),0))} estimated` : 'None yet'],
+      ['Seed lots supplied', lots.length? lots.map(l=>l.lotNo||l.crop).join(', ') : 'None'],
+    ])}
+    ${prs.length? `<div class="card-title" style="margin-top:14px;">Recent purchase requests</div>
+      <div class="table-scroll" style="max-height:200px;"><table><thead><tr><th>PR No.</th><th>Item</th><th style="text-align:right;">Est. cost</th><th>Status</th></tr></thead><tbody>
+      ${prs.slice(0,8).map(p=>`<tr><td class="mono">${esc(p.prNo)}</td><td>${esc(p.item)}</td><td class="mono" style="text-align:right;">${money(p.estCost||0)}</td><td>${st(p.status==='Delivered'?'green':p.status==='Pending Approval'?'gold':'blue', p.status)}</td></tr>`).join('')}
+      </tbody></table></div>` : ''}
+  `, [
+    {label:'Edit', cls:'leaf', action:()=>{ closeDrawer(); openSupplierModal(s.id); }},
+    CURRENT.access.includes('procurement')? {label:'New PR from this supplier', cls:'secondary', action:()=>{ closeDrawer(); nav('procurement'); openPRModal(); const el=document.getElementById('pr-supplier'); if(el) el.value = s.name; }} : null,
+    isSuper()? {label:'Delete', cls:'rust', action:()=>deleteRecord('suppliers', s.id, 'renderSuppliers')} : null,
+    {label:'Close', cls:'secondary', action:closeDrawer},
+  ].filter(Boolean));
+}
+
+/* ---- livestock tags: incremental per species (COW-001, SH-004, ...) ---- */
+function herdTagPrefix(sp){
+  const custom = {dairy:'COW', beef:'BF', cattle:'COW', goat:'GT', goats:'GT', sheep:'SH', poultry:'CHK', chicken:'CHK', layers:'LYR', broilers:'BRL', rabbit:'RB', rabbits:'RB', pig:'PIG', pigs:'PIG', swine:'PIG'};
+  if(custom[sp]) return custom[sp];
+  const label = (typeof SPECIES_LABEL==='function' ? SPECIES_LABEL(sp) : sp) || sp;
+  return String(label).replace(/[^A-Za-z]/g,'').slice(0,3).toUpperCase() || 'ANM';
+}
+function nextHerdTag(sp){
+  const prefix = herdTagPrefix(sp);
+  const nums = (DATA.livestockInventory||[]).filter(a=>a.species===sp).map(a=>parseInt((String(a.tag||'').match(/(\d+)\s*$/)||[])[1],10)).filter(n=>!isNaN(n));
+  return prefix+'-'+String((nums.length? Math.max(...nums) : 0)+1).padStart(3,'0');
+}
+function onHerdSpeciesChange(sp){
+  const tag = document.getElementById('hd-tag'); if(!tag) return;
+  /* only the untouched auto-generated value is replaced - never a typed name or a saved tag */
+  if(!tag.value.trim() || tag.value.trim()===tag.dataset.auto){ tag.value = nextHerdTag(sp); tag.dataset.auto = tag.value; }
+}
+
 /* PR numbers continue from the highest existing number (deletes and concurrent
    devices no longer reissue a number) */
 function nextPrNo(){ const nums = DATA.procurement.map(p=>parseInt(String(p.prNo||'').replace(/\D/g,''),10)).filter(n=>!isNaN(n)); return 'PR-'+String((nums.length? Math.max(...nums) : 231)+1).padStart(4,'0'); }
@@ -4856,7 +5213,7 @@ function openPRModal(){
       <div class="field"><label>Quantity</label><input type="number" id="pr-qty" value="10"></div>
       <div class="field"><label>Unit</label><input id="pr-unit" placeholder="e.g. bale / kg / pcs"></div>
       <div class="field"><label>Date Needed</label><input type="date" id="pr-date" value="${addDays(5)}"></div>
-      <div class="field"><label>Preferred Supplier</label><input id="pr-supplier" placeholder="e.g. Amiran Kenya"></div>
+      <div class="field"><label>Preferred Supplier</label><input id="pr-supplier" list="supplier-datalist" placeholder="e.g. Amiran Kenya"><datalist id="supplier-datalist">${(DATA.suppliers||[]).map(s=>`<option value="${esc(s.name)}">`).join('')}</datalist></div>
       <div class="field"><label>Estimated Cost (KES)</label><input type="number" id="pr-cost" value="10000"></div>
     </div>
   `, [
@@ -5236,7 +5593,7 @@ function updateAcreageResult(){
 /* ================= FARM PLOTS ================= */
 function plotProgress(p){
   const total = +p.totalDays || cropCycleDays(p.crop) || 90;
-  const day = p.dop? Math.max(0, Math.round((new Date()-new Date(p.dop+'T00:00:00'))/86400000)) : 0;
+  const day = p.dop? Math.max(0, Math.floor((new Date()-new Date(p.dop+'T00:00:00'))/86400000)) : 0; /* whole days since planting, recomputed live */
   const frac = Math.min(1, total? day/total : 1);
   const stage = stageFromFraction(frac);
   return { day, total, frac, pct:Math.round(frac*100), stage, stageIdx:CROP_STAGES.indexOf(stage), harvestDate: p.dop? addDaysTo(p.dop, total) : null, daysLeft: Math.max(0, total-day), due: day>=total };
@@ -5437,6 +5794,7 @@ function renderIrrigation(root){
         <div class="field"><label>Target irrigation depth</label><input type="number" id="ir-depth" value="15" step="1"><small>mm per irrigation event</small></div>
         <div class="field field-full"><label>Area to irrigate <span class="small-muted">(optional - for total volume)</span></label><input type="number" id="ir-area" value="0.25" step="0.05"><small>acres (1 acre = 0.405 hectares) - leave as-is to skip</small></div>
       </div>
+      <div class="field"><label>Pump fuel use (L/hr)</label><input type="number" id="ir-fuel" value="3.5" min="0" step="0.1"><small>Typical small petrol pump ≈ 3.5 L per running hour.</small></div>
       <button class="btn leaf sm" style="margin-top:10px;" onclick="calcIrrigation()">Calculate hours required</button>
     </div>
     <div class="card">
@@ -5500,20 +5858,36 @@ function calcIrrigation(){
       ${kpi('Volume per event', totalVolumeL.toLocaleString(undefined,{maximumFractionDigits:0})+' L', 'for the whole area', 'irrigation')}
     `;
   }
+  const fuelEl = document.getElementById('ir-fuel');
+  const fuelRate = fuelEl && fuelEl.value!=='' ? Math.max(0, +fuelEl.value) : 3.5;
+  const fuelL = hours * fuelRate;
   document.getElementById('ir-result').innerHTML = `
-    <div class="grid cols-2">
+    <div class="grid cols-3">
       ${kpi('Hours required', `${hh}h ${mm}m`, `to deliver ${depth} mm`, 'irrigation')}
       ${kpi('Application rate', appRate.toFixed(2)+' mm/hr', 'for reference', 'irrigation')}
+      ${kpi('Fuel required', fuelL.toFixed(1)+' L', `at ${fuelRate} L per pump hour`, 'irrigation')}
     </div>
     ${volumeHtml? `<div class="grid cols-3" style="margin-top:12px;">${volumeHtml}</div>` : ''}
   `;
   logActivity(`Ran irrigation calculation - ${flow}L/h emitters, ${espace}m x ${lspace}m spacing, target ${depth}mm.`);
 }
-function cropKc(fraction){
-  if(fraction<=0.2) return 0.5;
-  if(fraction<=0.5) return 0.5 + (fraction-0.2)/(0.5-0.2)*(1.05-0.5);
-  if(fraction<=0.8) return 1.05;
-  return 1.05 - (fraction-0.8)/(1-0.8)*(1.05-0.85);
+/* FAO-56 (Allen et al. 1998, Table 12) crop coefficients: [Kc initial, Kc mid, Kc end].
+   Reference evapotranspiration comes live from Open-Meteo for the weather area;
+   ETc = Kc x ETo, so the requirement is crop-specific and day-specific. */
+const CROP_KC = { tomato:[0.6,1.15,0.8], capsicum:[0.6,1.05,0.9], pepper:[0.6,1.05,0.9], cucumber:[0.6,1.0,0.75], brassica:[0.7,1.05,0.95], cabbage:[0.7,1.05,0.95], kale:[0.7,1.05,0.95], sukuma:[0.7,1.05,0.95], onion:[0.7,1.05,0.85], watermelon:[0.4,1.0,0.75], melon:[0.5,1.05,0.75], butternut:[0.5,1.0,0.8], squash:[0.5,0.95,0.75], pumpkin:[0.5,1.0,0.8], eggplant:[0.6,1.05,0.9], maize:[0.3,1.2,0.6], beans:[0.4,1.15,0.55], potato:[0.5,1.15,0.75], 'sweet potato':[0.5,1.15,0.65], spinach:[0.7,1.0,0.95], carrot:[0.7,1.05,0.95], banana:[0.5,1.1,1.0], pawpaw:[0.5,0.95,0.75], papaya:[0.5,0.95,0.75], avocado:[0.6,0.85,0.75], mango:[0.45,0.8,0.7], citrus:[0.7,0.65,0.7] };
+function cropKcFor(crop){
+  if(!crop) return null;
+  const q = crop.trim().toLowerCase();
+  const k = Object.keys(CROP_KC).find(c=>q===c) || Object.keys(CROP_KC).find(c=>q.includes(c));
+  return k? {name:k, kc:CROP_KC[k]} : null;
+}
+function cropKc(fraction, crop){
+  const t = cropKcFor(crop);
+  const [ini, mid, end] = t? t.kc : [0.5, 1.05, 0.85];
+  if(fraction<=0.2) return ini;
+  if(fraction<=0.5) return ini + (fraction-0.2)/(0.5-0.2)*(mid-ini);
+  if(fraction<=0.8) return mid;
+  return mid - (fraction-0.8)/(1-0.8)*(mid-end);
 }
 const SOIL_RAW_MM = {sandy:15, loam:25, clay:35};
 /* Typical days from planting to harvest (field crops, Kenyan conditions); editable per plot */
@@ -5573,11 +5947,14 @@ async function calcCropWaterRequirement(){
   const resEl = document.getElementById('cwr-result');
   if(!dop){ resEl.innerHTML = '<div class="small-muted">Set the Date of Planting to calculate the water requirement.</div>'; return; }
   resEl.innerHTML = '<span class="small-muted"><span class="spinner"></span> Fetching reference evapotranspiration…</span>';
-  const daysAfterPlanting = Math.max(0, Math.round((new Date()-new Date(dop+'T00:00:00'))/86400000));
+  const daysAfterPlanting = Math.max(0, Math.floor((new Date()-new Date(dop+'T00:00:00'))/86400000));
   const fraction = Math.min(1, daysAfterPlanting/totalDays);
   const autoStage = stageFromFraction(fraction);
   const selStage = stageSel==='auto'? autoStage : CROP_STAGES.find(s=>s.key===stageSel);
-  const kc = stageSel==='auto'? cropKc(fraction) : selStage.kc;
+  /* crop-specific FAO-56 coefficients when the crop is known; generic curve otherwise */
+  const kcInfo = cropKcFor(crop);
+  const stageKc = s => { const [ini,mid,end] = kcInfo? kcInfo.kc : [0.5,1.05,0.85]; return s.key==='initial'? ini : s.key==='development'? (ini+mid)/2 : s.key==='mid'? mid : (mid+end)/2; };
+  const kc = stageSel==='auto'? cropKc(fraction, crop) : stageKc(selStage);
   const eto = await fetchEtoToday();
   if(!document.getElementById('cwr-result')) return;
   const loc = DATA.weatherLocation;
@@ -5586,14 +5963,15 @@ async function calcCropWaterRequirement(){
   const intervalDays = etc>0 ? Math.max(1, Math.round(raw/etc)) : null;
   const stageRows = CROP_STAGES.map(s=>{
     const days = Math.max(1, Math.round((s.to-s.from)*totalDays));
-    const sEtc = eto*s.kc;
+    const sKc = stageKc(s);
+    const sEtc = eto*sKc;
     const sInterval = sEtc>0? Math.max(1, Math.round(raw/sEtc)) : null;
     const current = s.key===selStage.key;
     return `<tr style="${current?'background:var(--mint-soft);font-weight:600;':''}">
       <td>${s.name}${current? (stageSel==='auto'? ' '+st('green','now') : ' '+st('gold','selected')) : ''}</td>
       <td class="mono">${Math.round(s.from*100)}-${Math.round(s.to*100)}%</td>
       <td class="mono">~${days}d</td>
-      <td class="mono">${s.kc.toFixed(2)}</td>
+      <td class="mono">${sKc.toFixed(2)}</td>
       <td class="mono">${sEtc.toFixed(2)} mm/day</td>
       <td class="mono">${(sEtc*days).toFixed(0)} mm</td>
       <td class="mono">every ~${sInterval}d × ${raw}mm</td>
@@ -5602,7 +5980,7 @@ async function calcCropWaterRequirement(){
   resEl.innerHTML = `
     <div class="grid cols-2">
       ${kpi(stageSel==='auto'? 'Current stage (from D.o.P)' : 'Selected stage', selStage.name, stageSel==='auto'? `Day ${daysAfterPlanting} of ${totalDays} (${Math.round(fraction*100)}%)` : `Planning view · today is day ${daysAfterPlanting}`, 'irrigation')}
-      ${kpi('Crop coefficient (Kc)', kc.toFixed(2), stageSel==='auto'? 'from the FAO-56 curve at the current day' : 'stage midpoint value', 'irrigation')}
+      ${kpi('Crop coefficient (Kc)', kc.toFixed(2), kcInfo? `FAO-56 table for ${kcInfo.name} (ini ${kcInfo.kc[0]} · mid ${kcInfo.kc[1]} · end ${kcInfo.kc[2]})` : 'generic FAO-56 curve (crop not in the table)', 'irrigation')}
       ${kpi('Reference ETo today', eto.toFixed(2)+' mm/day', esc(loc.name.split(',')[0])+' · live evaporation rate', 'weather')}
       ${kpi('Crop water use (ETc)', etc.toFixed(2)+' mm/day', crop+' · Kc × ETo', 'irrigation')}
     </div>
@@ -6046,6 +6424,7 @@ async function loadAdvisoryPanel(){
       <div class="table-wrap"><div class="table-scroll"><table><thead><tr><th>Date</th><th>Disease Risk</th><th>Pest Risk</th><th>Spray Score</th><th>Recommendation</th></tr></thead><tbody>
       ${advisory.map(a=>`<tr><td>${fmtDate(a.date)}</td><td>${riskBadge(a.diseaseRisk)}</td><td>${riskBadge(a.pestRisk)}</td><td><b class="mono" style="color:${a.sprayScore>=7?'var(--forest)':a.sprayScore>=4?'var(--warn)':'var(--danger)'}">${a.sprayScore}/10</b></td><td style="font-size:12px;">${esc(a.recommendation)}</td></tr>`).join('')}
       </tbody></table></div></div>
+      ${sprayProductSuggestionsHTML(advisory)}
       <div class="disclaimer">${note} Always confirm product choice, rate and pre-harvest interval against the current label and your SOP before spraying.</div>
     `;
   };
@@ -6075,6 +6454,23 @@ For EACH of the 20 days, assess general fungal/bacterial disease risk and pest p
     renderAdvisory(advisory, 'Rule-based advisory computed from the weather figures (wet + warm raises disease risk; hot + dry raises mite, thrips and aphid pressure; rain chance lowers the spray score). The AI-enhanced advisory takes over automatically once the server AI key is configured.');
     logActivity('Generated 20-day spray/pest advisory (rule-based).');
   }
+}
+/* Category-level fungicide + insecticide suggestions for the 20-day outlook,
+   driven by how many days carry disease or pest risk. Common PCPB-registered
+   actives in Kenya are named as examples; the label always wins. */
+function sprayProductSuggestionsHTML(advisory){
+  const dHigh = advisory.filter(a=>a.diseaseRisk==='High').length, dMed = advisory.filter(a=>a.diseaseRisk==='Medium').length;
+  const pHigh = advisory.filter(a=>a.pestRisk==='High').length, pMed = advisory.filter(a=>a.pestRisk==='Medium').length;
+  const fung = dHigh? [['High disease pressure ('+dHigh+' day'+(dHigh===1?'':'s')+')','Rotate a protectant with a systemic: Mancozeb 80% WP or Chlorothalonil as weekly cover, alternated with Metalaxyl-M + Mancozeb (e.g. Ridomil Gold) against downy mildew / late blight, or Azoxystrobin (e.g. Ortiva) for early blight and powdery mildew. Copper oxychloride where bacterial spot or canker shows.']]
+    : dMed? [['Moderate pressure ('+dMed+' day'+(dMed===1?'':'s')+')','Keep a protectant cover during the humid spell: Mancozeb or Chlorothalonil every 7-10 days; copper-based products where bacterial disease is the concern.']]
+    : [['Low pressure','No routine fungicide needed. Keep Mancozeb or a copper product on standby and scout after any unexpected rain.']];
+  const insect = pHigh? [['Hot & dry pressure ('+pHigh+' day'+(pHigh===1?'':'s')+'): mites, thrips, aphids, whitefly','Abamectin for spider mites and leafminers; Spinetoram or Spinosad for thrips; Acetamiprid or Imidacloprid for aphids and whitefly (avoid open flowers - harsh on bees; spray late evening).']]
+    : pMed? [['Moderate pressure ('+pMed+' day'+(pMed===1?'':'s')+')','Scout twice a week and spot-spray only where thresholds are crossed: Lambda-cyhalothrin for chewing pests, Acetamiprid for sucking pests, Bacillus thuringiensis (Bt) for caterpillars on brassicas.']]
+    : [['Low pressure','Monitoring only: yellow/blue sticky traps for whitefly and thrips in the propagation houses.']];
+  const card = (title, list) => `<div class="card" style="box-shadow:none;"><div class="card-title">${title}</div>${list.map(x=>`<div style="margin-bottom:8px;"><b style="font-size:12.6px;">${x[0]}</b><div class="small-muted" style="font-size:12.2px;line-height:1.55;">${x[1]}</div></div>`).join('')}</div>`;
+  return `<div class="section-title">Suggested products for this outlook<div class="line"></div></div>
+    <div class="grid cols-2">${card('Fungicide', fung)}${card('Insecticide / miticide', insect)}</div>
+    <div class="disclaimer">Rotate active-ingredient groups (FRAC/IRAC) between sprays to manage resistance, keep to the pre-harvest interval on every label, and use only PCPB-registered products. These are category suggestions read from the weather outlook, not a prescription - confirm against on-site scouting.</div>`;
 }
 function ruleBasedAdvisory(days){
   return (days||[]).filter(d=>d && d.date).map(d=>{
@@ -6339,6 +6735,13 @@ function renderHR(root){
     ${kpi('ID Documents on File', DATA.staff.filter(s=>s.idUploaded).length+' / '+DATA.staff.length, DATA.staff.filter(s=>!s.idUploaded).length? DATA.staff.filter(s=>!s.idUploaded).length+' missing - follow up':'All uploaded', 'access', DATA.staff.filter(s=>!s.idUploaded).length?'warn':'')}
     ${kpi('Avg. Performance Rating', (DATA.staff.reduce((a,b)=>a+(b.rating||0),0)/Math.max(1,DATA.staff.length)).toFixed(1)+' / 5', 'set by HOD, HR and Admin', 'trend')}
   </div>
+  ${(()=>{ const inStaff = new Set(DATA.staff.map(s=>(s.name||'').trim().toLowerCase()));
+     const accts = DATA.users.filter(u=>isActiveUser(u) && !inStaff.has((u.name||'').trim().toLowerCase()));
+     return accts.length? `<div class="card" style="margin-bottom:16px;">
+       <div class="card-title">Team accounts without a staff record · ${accts.length}</div>
+       <div class="small-muted" style="margin-bottom:8px;">These people sign in under Users & Access but HR has no staff record for them yet. Adding one pulls their name, phone, email, department and designation across.</div>
+       ${accts.map(u=>`<div class="queue-row"><div style="display:flex;gap:10px;align-items:center;min-width:0;"><div class="role-avatar" style="flex:none;">${avatarInner(u)}</div><div style="min-width:0;"><div style="font-weight:600;">${esc(u.name)} ${st('gold', u.role)}</div><div class="small-muted">${esc(u.designation)}${u.department? ' · '+esc(u.department):''}${u.phone? ' · '+esc(u.phone):''}${u.email? ' · '+esc(u.email):''}</div></div></div><button class="btn sm leaf" onclick="addStaffFromAccount('${u.id}')">Add to staff</button></div>`).join('')}
+     </div>` : ''; })()}
   ${dataTable('staff', {
     searchLabel:'staff',
     sortKey:'name', sortDir:1,
@@ -6398,6 +6801,15 @@ function openStaffDrawer(id){
     isSuper()? {label:'Delete', cls:'rust', action:()=>deleteRecord('staff', s.id, 'renderHR')} : null,
     {label:'Close', cls:'secondary', action:closeDrawer},
   ].filter(Boolean));
+}
+/* prefills the staff form from a Users & Access account */
+function addStaffFromAccount(userId){
+  const u = DATA.users.find(x=>x.id===userId); if(!u) return;
+  openStaffModal();
+  const set = (id,v)=>{ const el=document.getElementById(id); if(el && v) el.value = v; };
+  set('hr-name', u.name); set('hr-phone', u.phone||''); set('hr-spec', u.designation||'');
+  const dep = document.getElementById('hr-dept');
+  if(dep && u.department && [...dep.options].some(o=>o.value===u.department)) dep.value = u.department;
 }
 function openStaffModal(editId){
   const rec = editId ? DATA.staff.find(s=>s.id===editId) : null;
@@ -6617,7 +7029,7 @@ function openReportViewersModal(key){
   const r = REPORT_DEFS.find(x=>x.key===key);
   if(!r) return;
   const current = new Set(reportViewers(key));
-  const candidates = DATA.users.filter(u=>u.status!=='Pending' && !(u.role==='Admin'||u.role==='SuperUser'));
+  const candidates = DATA.users.filter(u=>isActiveUser(u) && !(u.role==='Admin'||u.role==='SuperUser'));
   openModal('Viewers · '+r.name, `
     <p style="margin:0 0 10px;font-size:12.6px;line-height:1.6;">Admins and the Super User always see every report${r.access.length? '; the roles <b>'+esc(r.access.join(', '))+'</b> see this one by default' : ''}. Tick individual users to grant them viewing rights for this report only.</p>
     ${candidates.map(u=>`<label class="checkline" style="padding:6px 0;border-bottom:1px solid var(--line-soft);"><input type="checkbox" class="rv-user" value="${u.id}" ${current.has(u.id)?'checked':''}> <span>${esc(u.name)} <span class="small-muted">· ${esc(u.role)}${r.access.includes(u.role)? ' (already via role)':''}</span></span></label>`).join('') || '<div class="small-muted">No other users yet.</div>'}
@@ -6655,7 +7067,7 @@ function buildReport(key){
   if(key==='sales'){
     const sales = DATA.cashSales.slice().sort((a,b)=>(a.date||'')<(b.date||'')?-1:1);
     const vatOf = s => s.vatAmount!=null ? +s.vatAmount : (s.vat==='Standard 16%' ? Math.round(s.total - s.total/1.16) : 0);
-    const rows = sales.map(s=>[s.receiptNo, fmtDate(s.date), s.customer, s.kraPin||'-', s.crop+(s.batchCode? ' ('+s.batchCode+')':''), s.qty.toLocaleString(), money(s.unitPrice), money(s.total), s.vat, money(vatOf(s)), s.payment, s.servedBy]);
+    const rows = sales.flatMap(s=>saleItems(s).map((it,ix)=>[s.receiptNo+(saleItems(s).length>1? ' ('+(ix+1)+')':''), fmtDate(s.date), s.customer, s.kraPin||'-', it.crop+(it.batchCode? ' ('+it.batchCode+')':''), itemQtyLabel(it), money(it.unitPrice), money(it.total), s.vat, ix===0? money(vatOf(s)) : '', s.payment, s.servedBy]));
     const revenue = sales.reduce((a,b)=>a+b.total,0);
     const vatTotal = sales.reduce((a,b)=>a+vatOf(b),0);
     const byMonth = {}; sales.forEach(s=>{ const m=(s.date||'').slice(0,7); byMonth[m]=(byMonth[m]||0)+s.total; });
@@ -6665,7 +7077,7 @@ function buildReport(key){
         {heading:'Sales register', head:['Receipt','Date','Customer','KRA PIN','Item (batch)','Qty','Unit Price','Total','VAT Treatment','VAT (KES)','Payment','Served By'], rows},
         {heading:'Revenue by month', head:['Month','Revenue'], rows: monthRows.length? monthRows : [['-','-']]},
       ],
-      summary:[['Receipts', sales.length], ['Seedlings sold', sales.reduce((a,b)=>a+b.qty,0).toLocaleString()], ['Total revenue', money(revenue)], ['VAT in standard-rated sales (16% inclusive)', money(vatTotal)], ['Company KRA PIN', DATA.companyKraPin||'Not set']] };
+      summary:[['Receipts', sales.length], ['Seedlings sold', sales.reduce((a,b)=>a+saleSeedlingsTotal(b),0).toLocaleString()], ['Total revenue', money(revenue)], ['VAT in standard-rated sales (16% inclusive)', money(vatTotal)], ['Company KRA PIN', DATA.companyKraPin||'Not set']] };
   }
   if(key==='stock'){
     const cons = DATA.consumables.map(c=>[c.name, c.qty+' '+c.unit, money(c.unitCost), money(c.qty*c.unitCost), c.qty<=c.reorder?'Reorder':'Healthy']);
@@ -6825,29 +7237,84 @@ function generateReport(key, fmt){
 }
 
 /* ================= USERS & ACCESS ================= */
+/* the Manage users table: a filter beside the search box, because the account list
+   grows with the team and "who is awaiting approval" is the daily question */
+const USER_FILTERS = ['All accounts','Active','Awaiting approval','Suspended','Admins & Super Users'];
+let USER_FILTER = 'All accounts';
+function usersForTable(){
+  /* an id that is not plain text never reaches the table: dataTable interpolates
+     r.id straight into onclick, where escaping alone would not save us */
+  return DATA.users.filter(u=>isSafeId(u.id)).filter(u=>{
+    if(USER_FILTER==='Active') return userStatusOf(u)==='Active';
+    if(USER_FILTER==='Awaiting approval') return userStatusOf(u)==='Pending';
+    if(USER_FILTER==='Suspended') return userStatusOf(u)==='Suspended';
+    if(USER_FILTER==='Admins & Super Users') return u.role==='Admin' || u.role==='SuperUser';
+    return true;
+  });
+}
+function setUserFilter(v){
+  USER_FILTER = v;
+  if(TABLE_CFG['users']){
+    TABLE_CFG['users'].rows = usersForTable().map(u=>({id:u.id, u}));
+    dtState('users').page = 1;
+    dtRefreshBody('users');
+  }
+}
+/* addressed by position, never by id: the id is the untrusted part, so it never
+   travels through an onclick attribute */
+async function removeUnsafeUser(index){
+  if(!isSuper()){ toast('Only the Super User can delete accounts.','err'); return; }
+  const u = DATA.users.filter(x=>!isSafeId(x.id))[index]; if(!u) return;
+  if(SERVER_MODE && !serverActionAvailable()){ toast('Removing an account needs a connection to the workspace: it cannot be queued offline.','err'); return; }
+  if(!confirm(`Remove the account "${u.name}"? Its id is not usable by this workspace.`)) return;
+  if(SERVER_MODE){
+    /* the id cannot travel in a path (the route matchers reject it), and the delta
+       push cannot express a deletion, so the removal goes through the bulk route's
+       explicit remove list or the next pull simply brings the row back */
+    try{ await API.req('users', {method:'PUT', body:{users:[], remove:[u.id]}}); }
+    catch(e){ toast('The server refused the removal: '+(e.message||'error'),'err'); return; }
+  }
+  const before = JSON.stringify(DATA.users);
+  DATA.users = DATA.users.filter(x=>x!==u);
+  if(SYNC_BASE.__users === syncHash(before)) setSynced('__users', JSON.stringify(DATA.users));
+  logActivity(`${CURRENT.name} removed an account with an unusable id.`);
+  saveData(); renderAccess(document.getElementById('view-root'));
+  toast('Account removed.');
+}
 function renderAccess(root){
   const pending = DATA.accessRequests.filter(r=>r.status==='Pending');
+  const safeUsers = DATA.users.filter(u=>isSafeId(u.id));
+  const unsafeUsers = DATA.users.filter(u=>!isSafeId(u.id));
   root.innerHTML = `
-  <div class="view-header"><div><h2>Users & Access</h2><p>Restricted to Admin / MD and the Super User. New team members register themselves from the login page (or via an invitation link) and appear below for approval. Accounts are permanent until deleted here or the database is wiped.</p></div>
+  <div class="view-header"><div><h2>Users & Access</h2><p>Restricted to Admin / MD and the Super User. New team members register themselves from the login page (or via an invitation link) and appear below for approval. The Super User opens any account to view and edit its details, module access, status and password. Accounts are permanent until deleted here or the database is wiped.</p></div>
   <div style="display:flex;gap:8px;flex-wrap:wrap;">
     ${SERVER_MODE? `<button class="btn secondary" onclick="openInviteModal()">✉ Invite a team member</button>`:''}
-    <button class="btn" onclick="openUserModal()">+ Add user</button>
+    ${isSuper()? `<button class="btn" onclick="openUserModal()">+ Add user</button>` : ''}
   </div></div>
-  ${(()=>{ const regs = DATA.users.filter(u=>u.status==='Pending'); return regs.length? `
+  ${(()=>{ const regs = safeUsers.filter(u=>userStatusOf(u)==='Pending'); return regs.length? `
   <div class="card" style="margin-bottom:22px;border-color:var(--gold);">
     <div class="card-title">Pending registrations · ${regs.length} awaiting approval</div>
     ${regs.map(u=>`<div class="queue-row" style="align-items:flex-start;">
       <div style="display:flex;gap:10px;align-items:center;min-width:0;">
         <div class="role-avatar" style="flex:none;">${avatarInner(u)}</div>
         <div style="min-width:0;"><div style="font-weight:600;">${esc(u.name)} ${st('gold', u.role)}</div>
-        <div class="small-muted">${esc(u.designation)}${u.department? ' · '+esc(u.department):''}${u.phone? ' · '+esc(u.phone):''}${u.email? ' · '+esc(u.email):''} · will receive ${(u.access||[]).length} module(s)</div></div>
+        <div class="small-muted">${esc(u.designation)}${u.department? ' · '+esc(u.department):''}${u.phone? ' · '+esc(u.phone):''}${u.email? ' · '+esc(u.email):''} · will start on the default modules for ${esc(u.role)}</div></div>
       </div>
       <div style="flex:none;display:flex;gap:7px;">
-        <button class="btn sm leaf" onclick="approveRegistration('${u.id}')">Approve</button>
-        <button class="btn sm rust" onclick="rejectRegistration('${u.id}')">Reject</button>
+        <button class="btn sm leaf" onclick="approveRegistration('${esc(u.id)}')">Approve</button>
+        <button class="btn sm rust" onclick="rejectRegistration('${esc(u.id)}')">Reject</button>
       </div>
     </div>`).join('')}
   </div>` : ''; })()}
+  ${unsafeUsers.length? `
+  <div class="card" style="margin-bottom:22px;border-color:var(--danger);">
+    <div class="card-title" style="color:var(--danger);">Unsafe account ids · ${unsafeUsers.length}</div>
+    <div class="small-muted" style="margin-bottom:10px;">These accounts carry an id this workspace will not display. They cannot be edited here and should be removed.</div>
+    ${unsafeUsers.map((u,i)=>`<div class="queue-row">
+      <div style="min-width:0;"><div style="font-weight:600;">${esc(u.name)}</div><div class="small-muted">${esc(u.role||'')}${u.designation? ' · '+esc(u.designation):''}</div></div>
+      <button class="btn sm rust" style="flex:none;" onclick="removeUnsafeUser(${i})">Remove account</button>
+    </div>`).join('')}
+  </div>` : ''}
   <div class="grid cols-2" style="margin-bottom:22px;">
     <div class="card">
       <div class="card-title">Workspace settings</div>
@@ -6866,6 +7333,15 @@ function renderAccess(root){
       <div id="releases-body" class="small-muted">Loading releases…</div>
     </div>
     ${isSuper()? `
+    <div class="card">
+      <div class="card-title">Backup & restore · Super User only</div>
+      <div class="small-muted" style="margin-bottom:10px;">One JSON file with the whole workspace: accounts (never passwords) and every module's data. Restoring updates accounts (existing passwords are kept) and replaces module data.</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="btn sm leaf" onclick="downloadBackup()">⬇ Download backup</button>
+        <button class="btn sm secondary" onclick="openEmailBackupModal()">✉ Email backup…</button>
+        <label class="btn sm secondary" style="cursor:pointer;">Restore from backup…<input type="file" accept=".json,application/json" style="display:none" onchange="restoreBackupFile(this.files[0]); this.value='';"></label>
+      </div>
+    </div>
     <div class="card" style="border-color:var(--danger);">
       <div class="card-title" style="color:var(--danger);">Danger zone · Super User only</div>
       <div style="font-size:12.4px;line-height:1.6;margin-bottom:12px;">Clear the mock or current operational data for a fresh, production-ready environment. User accounts, departments, organisation settings and the weather area are kept.</div>
@@ -6881,7 +7357,7 @@ function renderAccess(root){
       <span class="small-muted">Counted from logged actions · a candidate list for recognition and rewards</span>
     </div>
     ${(()=>{
-      const ranked = DATA.users.filter(u=>u.status!=='Pending').map(u=>({u, c:activityCount(u.id)})).sort((a,b)=>b.c-a.c);
+      const ranked = safeUsers.filter(isActiveUser).map(u=>({u, c:activityCount(u.id)})).sort((a,b)=>b.c-a.c);
       const maxC = Math.max(...ranked.map(r=>r.c), 1);
       return ranked.map(({u,c},i)=>`<div class="queue-row">
         <div style="display:flex;align-items:center;gap:10px;min-width:0;flex:1;">
@@ -6907,56 +7383,107 @@ function renderAccess(root){
     </div>`).join('') : '<div class="small-muted">No pending requests.</div>'}
   </div>
   <div class="section-title" style="margin-top:0;">Manage users<div class="line"></div></div>
-  <div class="table-wrap" style="margin-bottom:22px;"><div class="table-scroll"><table><thead><tr><th>Name</th><th>Role</th><th>Designation</th><th>Phone</th><th>Status</th><th></th></tr></thead><tbody>
-  ${DATA.users.map(u=>`<tr><td><b>${esc(u.name)}</b>${u.email?`<div class="cell-sub">${esc(u.email)}</div>`:''}</td><td>${st('gold', u.role)}</td><td>${esc(u.designation)}${u.department?`<div class="cell-sub">${esc(u.department)}</div>`:''}</td><td>${esc(u.phone)}</td><td>${u.status==='Pending'? st('amber','Awaiting approval') : st('green','Active')}</td><td><button class="btn sm secondary" onclick="openUserModal('${u.id}')">Edit</button> <button class="btn sm rust" onclick="deleteUser('${u.id}')">Delete</button></td></tr>`).join('')}
-  </tbody></table></div></div>
+  ${dataTable('users', {
+    searchLabel:'name, role, department or email',
+    sortKey:'name', sortDir:1, pageSize:10,
+    rows: usersForTable().map(u=>({id:u.id, u})),
+    onRowClick: isSuper()? 'openUserPanel' : undefined,
+    toolbarHTML: `<select style="border:1px solid var(--line);border-radius:8px;padding:7px 10px;font-size:12.3px;background:var(--surface-soft);color:var(--ink);" onchange="setUserFilter(this.value)">${USER_FILTERS.map(o=>`<option ${USER_FILTER===o?'selected':''}>${esc(o)}</option>`).join('')}</select>`,
+    emptyTitle:'No accounts match',
+    emptyText:'Clear the search box or the filter to see the whole team.',
+    columns:[
+      {key:'name', label:'Name', val:r=>(r.u.name||'')+' '+(r.u.email||''), html:r=>`<div style="display:flex;align-items:center;gap:9px;min-width:0;"><div class="role-avatar" style="width:28px;height:28px;font-size:10.5px;flex:none;">${avatarInner(r.u)}</div><div style="min-width:0;"><div class="cell-main">${esc(r.u.name)}</div>${(isSuper() && r.u.email)?`<div class="cell-sub">${esc(r.u.email)}</div>`:''}</div></div>`},
+      {key:'role', label:'Role', val:r=>r.u.role||'', html:r=>st('gold', r.u.role||'-')},
+      {key:'designation', label:'Designation', val:r=>(r.u.designation||'')+' '+(r.u.department||''), html:r=>`${esc(r.u.designation||'-')}${r.u.department?`<div class="cell-sub">${esc(r.u.department)}</div>`:''}`},
+      {key:'phone', label:'Phone', val:r=>isSuper()? (r.u.phone||'') : '', html:r=>isSuper()? esc(r.u.phone||'-') : '<span class="small-muted">hidden</span>'},
+      {key:'modules', label:'Modules', align:'right', val:r=>(r.u.access||[]).length, html:r=>`<span class="mono">${(r.u.access||[]).length}</span>`},
+      {key:'status', label:'Status', val:r=>userStatusOf(r.u), html:r=>userStatusChip(r.u)},
+      {key:'act', label:'', sortable:false, align:'right', val:r=>'', html:r=>isSuper()? `<button class="btn sm secondary" onclick="event.stopPropagation();openUserPanel('${esc(r.id)}')">Open</button>` : '<span class="small-muted">Super User manages accounts</span>'},
+    ],
+    rowMenu: isSuper()? (r=>[
+      {label:'Open account', run:()=>openUserPanel(r.id)},
+      {label:'Set a password', run:()=>openUserPanel(r.id,'security')},
+      userStatusOf(r.u)==='Pending' ? {label:'Approve registration', run:()=>approveRegistration(r.id)} : null,
+      (r.id!==CURRENT.id && !isLastSuperUser(r.id)) ? {label:'Delete account…', danger:true, run:()=>deleteUser(r.id)} : null,
+    ]) : null,
+  })}
+  <div style="height:22px;"></div>
   <div class="section-title" style="margin-top:0;">Module access matrix<div class="line"></div></div>
   <div class="table-wrap"><div class="table-scroll">
   <table class="access-matrix"><thead><tr><th>User</th>${ALL_MODULE_KEYS.map(k=>{
     const it = MODULES.flatMap(g=>g.items).find(i=>i.key===k);
     return `<th title="${it.label}">${it.label.split(' ')[0]}</th>`;
   }).join('')}</tr></thead><tbody>
-  ${DATA.users.map(u=>`<tr><td><b>${esc(u.name)}</b><br><span class="small-muted">${esc(u.role)} · ${esc(u.designation)}</span></td>${ALL_MODULE_KEYS.map(k=>`<td><span class="switch ${u.access.includes(k)?'on':''}" onclick="toggleAccess('${u.id}','${k}')"></span></td>`).join('')}</tr>`).join('')}
+  ${safeUsers.map(u=>{
+    /* an Admin's edits to a Super User's record are refused by the server, so the
+       switches on that row are shown as read-only rather than silently dropped */
+    const locked = !isSuper() && u.role==='SuperUser';
+    return `<tr><td><b>${esc(u.name)}</b><br><span class="small-muted">${esc(u.role)} · ${esc(u.designation)}</span></td>${ALL_MODULE_KEYS.map(k=>`<td><span class="switch ${(u.access||[]).includes(k)?'on':''}" ${locked? 'style="opacity:.45;cursor:not-allowed;" title="Only the Super User can change a Super User\'s access."' : `onclick="toggleAccess('${esc(u.id)}','${k}')"`}></span></td>`).join('')}</tr>`;
+  }).join('')}
   </tbody></table>
   </div></div>
   <div class="disclaimer">Access changes apply immediately and are logged to the Audit Log for traceability. This page is only reachable by Admin/MD or the Super User - everyone else must use "Request Access" from a locked sidebar item.</div>
   `;
   loadReleasesCard();
-  /* pull registrations that arrived after this client loaded its state */
-  if(SERVER_MODE && API.token){
-    API.req('state').then(st=>{
-      const localIds = new Set(DATA.users.map(u=>u.id));
-      const newcomers = (st.users||[]).filter(u=>!localIds.has(u.id));
-      if(newcomers.length){
-        DATA.users.push(...stripLegacyDashes(newcomers));
-        SYNC_BASE.__users = syncHash(JSON.stringify(DATA.users));
-        if(document.querySelector('.sb-item.active')?.dataset.key==='access') renderAccess(root);
-      }
+  /* pull registrations that arrived after this client loaded its state, and edits a
+     colleague made from another device. Never while this device holds unsynced
+     account edits, and never under an open dialog. The callback must not be named
+     `st`: that shadows the status-chip helper for the whole re-render. */
+  if(SERVER_MODE && API.token && !OFFLINE && !SESSION_EXPIRED){
+    API.req('state').then(res=>{
+      /* never swap the list out from under an open account panel: its draft is keyed
+         to the record that was on screen when it opened */
+      if(usersDirty() || document.getElementById('active-modal')) return;
+      const fresh = stripLegacyDashes(res.users||[]);
+      if(!fresh.length || JSON.stringify(fresh)===JSON.stringify(DATA.users)) return;
+      DATA.users = fresh;
+      if(CURRENT) CURRENT = DATA.users.find(u=>u.id===CURRENT.id) || CURRENT;
+      setSynced('__users', JSON.stringify(DATA.users));
+      if(document.querySelector('.sb-item.active')?.dataset.key==='access' && !document.getElementById('active-modal')) renderAccess(root);
     }).catch(()=>{});
   }
 }
-function approveRegistration(userId){
+async function approveRegistration(userId){
   if(!canManage()){ toast('Only Admin/MD or the Super User can approve registrations.','err'); return; }
   const u = DATA.users.find(x=>x.id===userId);
   if(!u) return;
-  u.status = 'Active';
-  if(!u.access || !u.access.length) u.access = (ROLE_DEFAULT_ACCESS[u.role]||['dashboard']).slice();
-  logActivity(`${CURRENT.name} approved the registration of ${u.name} (${u.role}).`);
+  /* the applicant filled in their own registration form, module list included: never
+     carry that across, always start from the defaults for the role they were
+     approved into. Fine-tune afterwards on the account panel or the matrix. */
+  const access = (ROLE_DEFAULT_ACCESS[u.role]||['dashboard']).slice();
+  const before = JSON.stringify(DATA.users);
+  if(serverActionAvailable() && isSuper()){
+    try{
+      const res = await API.req('users/'+encodeURIComponent(userId), {method:'PUT', body:{status:'Active', access}});
+      DATA.users[DATA.users.findIndex(x=>x.id===userId)] = res.user;
+      if(SYNC_BASE.__users === syncHash(before)) setSynced('__users', JSON.stringify(DATA.users));
+    }catch(e){ toast('The server refused the approval: '+(e.message||'error'),'err'); return; }
+  }else{
+    u.status = 'Active';
+    u.access = access;
+  }
+  const fresh = DATA.users.find(x=>x.id===userId);
+  logActivity(`${CURRENT.name} approved the registration of ${fresh.name} (${fresh.role}) with ${access.length} module(s).`);
   saveData();
   rerenderAccessOrDashboard();
-  toast(u.name.split(' ')[0]+' approved - they can now sign in.');
+  toast(fresh.name.split(' ')[0]+' approved - they can now sign in.');
 }
 async function rejectRegistration(userId){
   if(!canManage()){ toast('Only Admin/MD or the Super User can reject registrations.','err'); return; }
   const u = DATA.users.find(x=>x.id===userId);
   if(!u) return;
+  if(SERVER_MODE && !serverActionAvailable()){ toast('Rejecting a registration needs a connection to the workspace: it cannot be queued offline.','err'); return; }
   if(!confirm(`Reject and remove the registration of "${u.name}"?`)) return;
-  DATA.users = DATA.users.filter(x=>x.id!==userId);
-  logActivity(`${CURRENT.name} rejected the registration of ${u.name}.`);
-  if(SERVER_MODE && API.token){
-    try{ await API.req('users', {method:'PUT', body:{users:DATA.users, remove:[userId]}}); SYNC_BASE.__users = syncHash(JSON.stringify(DATA.users)); }
-    catch(e){ toast('Server update failed: '+(e.message||'error'),'err'); }
+  if(SERVER_MODE){
+    /* the row must be gone on the server before the local list drops it, or the
+       next pull simply brings the registration back */
+    try{ await API.req('users/'+encodeURIComponent(userId), {method:'DELETE'}); }
+    catch(e){ toast('The server refused the rejection: '+(e.message||'error'),'err'); return; }
   }
+  const before = JSON.stringify(DATA.users);
+  DATA.users = DATA.users.filter(x=>x.id!==userId);
+  if(SYNC_BASE.__users === syncHash(before)) setSynced('__users', JSON.stringify(DATA.users));
+  logActivity(`${CURRENT.name} rejected the registration of ${u.name}.`);
   saveData();
   rerenderAccessOrDashboard();
   toast('Registration rejected.');
@@ -7134,77 +7661,491 @@ function openDemoResetModal(){
     }}
   ]);
 }
+/* "+ Add user" only: an account that already exists opens the full panel instead */
 function openUserModal(editId){
-  const rec = editId ? DATA.users.find(u=>u.id===editId) : null;
+  if(editId) return openUserPanel(editId);
+  if(!isSuper()){ toast('Only the Super User can create accounts.','err'); return; }
+  if(SERVER_MODE && !serverActionAvailable()){ toast('Creating an account needs a connection: the password cannot be queued offline.','err'); return; }
   const roles = ['Admin','SuperUser','HOD','HR','Finance','Sales','Agronomist','Procurement','Casual','Marketing'];
-  openModal(rec?'Edit User':'Add User', `
+  openModal('Add user', `
     <div class="form-grid">
-      <div class="field"><label>Full Name <span class="req">*</span></label><input id="us-name" value="${rec?esc(rec.name):''}"></div>
-      <div class="field"><label>Phone</label><input id="us-phone" placeholder="07XXXXXXXX" value="${rec?esc(rec.phone):''}"></div>
-      <div class="field"><label>Email</label><input id="us-email" type="email" placeholder="them@example.com" value="${rec?esc(rec.email||''):''}"></div>
-      <div class="field"><label>Department</label><select id="us-dept"><option value="">Not assigned</option>${DATA.departments.map(d=>`<option ${rec&&rec.department===d?'selected':''}>${esc(d)}</option>`).join('')}</select></div>
-      <div class="field"><label>Role</label><select id="us-role">${roles.map(r=>`<option ${rec&&rec.role===r?'selected':''}>${r}</option>`).join('')}</select></div>
-      <div class="field"><label>Designation</label><input id="us-desig" value="${rec?esc(rec.designation):''}"></div>
-      ${SERVER_MODE? `<div class="field field-full"><label>${rec? 'Reset password <span class="small-muted">(optional - leave blank to keep the current one)</span>' : 'Temporary password <span class="req">*</span>'}</label><input type="password" id="us-temp" autocomplete="new-password" placeholder="At least 8 characters"><small>The user signs in with this and is asked to set their own password on first sign-in.</small></div>` : ''}
+      <div class="field"><label>Full name <span class="req">*</span></label><input id="us-name"></div>
+      <div class="field"><label>Designation</label><input id="us-desig" placeholder="Nursery Casual"></div>
+      <div class="field"><label>Phone</label><input id="us-phone" placeholder="07XXXXXXXX"></div>
+      <div class="field"><label>Email</label><input id="us-email" type="email" placeholder="them@example.com"></div>
+      <div class="field"><label>Department</label><select id="us-dept"><option value="">Not assigned</option>${DATA.departments.map(d=>`<option>${esc(d)}</option>`).join('')}</select></div>
+      <div class="field"><label>Role</label><select id="us-role" onchange="const d=document.getElementById('us-desig'); if(!d.value) d.value = ROLE_DESIGNATIONS[this.value]||'';">${roles.map(r=>`<option ${r==='Casual'?'selected':''}>${r}</option>`).join('')}</select><small>The role sets the starting module list; fine-tune it on the account panel afterwards.</small></div>
+      ${SERVER_MODE? `<div class="field field-full"><label>Temporary password <span class="req">*</span></label>
+        <input type="password" id="us-temp" autocomplete="new-password" placeholder="At least 8 characters">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px;">
+          <button type="button" class="btn sm secondary" onclick="fillGeneratedPassword('us-temp')">Generate a strong one</button>
+          <button type="button" class="btn sm ghost" onclick="togglePasswordField('us-temp')">Show / hide</button>
+          <button type="button" class="btn sm ghost" onclick="copyFieldValue('us-temp')">Copy</button>
+        </div>
+        <small>They sign in with this and are asked to set their own password on first sign-in.</small></div>` : ''}
     </div>
     ${SERVER_MODE? '' : `<div class="disclaimer" style="margin-top:14px;">This standalone copy uses the shared demo password <b class="mono">spn2026</b> for every account. Deploy to Cloudflare for per-user credentials.</div>`}
   `, [
     {label:'Cancel', cls:'secondary', action:closeModal},
-    {label: rec?'Save Changes':'Add User', cls:'leaf', action: async ()=>{
+    {label:'Add user', cls:'leaf', action: async ()=>{
       const name=document.getElementById('us-name').value.trim();
-      if(!name){toast('Full name is required.','err');return;}
+      if(!name){ toast('Full name is required.','err'); return; }
       const role=document.getElementById('us-role').value;
-      const designation=document.getElementById('us-desig').value;
-      const phone=document.getElementById('us-phone').value;
       const email=document.getElementById('us-email').value.trim();
-      const department=document.getElementById('us-dept').value;
-      const tempEl = document.getElementById('us-temp');
-      const temp = tempEl ? tempEl.value : '';
-      if(SERVER_MODE && !rec && temp.length<8){ toast('A temporary password of at least 8 characters is required for a new account.','err'); return; }
-      if(SERVER_MODE && temp && temp.length<8){ toast('Temporary password must be at least 8 characters.','err'); return; }
-      let targetId = rec ? rec.id : uid('u');
-      if(rec){
-        Object.assign(rec, {name, role, designation, phone, email, department});
-        logActivity(`${CURRENT.name} updated user record: ${name}.`);
-        if(CURRENT.id===rec.id){ CURRENT.name=name; CURRENT.designation=designation; document.getElementById('uc-name').textContent=name; document.getElementById('uc-role').textContent=designation; }
-      }else{
-        DATA.users.push({id:targetId, name, role, designation, phone, email, department, access:['dashboard'], status:'Active'});
-        logActivity(`${CURRENT.name} added new user: ${name} (${role}).`);
-      }
-      if(SERVER_MODE && API.token){
+      if(email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){ toast('That email address does not look right.','err'); return; }
+      const tempEl=document.getElementById('us-temp'); const temp=tempEl? tempEl.value : '';
+      if(SERVER_MODE && temp.length<8){ toast('A temporary password of at least 8 characters is required for a new account.','err'); return; }
+      const rec = {
+        id: uid('u'), name, role,
+        designation: document.getElementById('us-desig').value.trim() || (ROLE_DESIGNATIONS[role]||''),
+        phone: document.getElementById('us-phone').value.trim(), email,
+        department: document.getElementById('us-dept').value,
+        access: (ROLE_DEFAULT_ACCESS[role]||['dashboard']).slice(),
+        status: 'Active', avatar: null,
+      };
+      const before = JSON.stringify(DATA.users);
+      if(SERVER_MODE){
         try{
-          /* sync the user row first so the password can attach to it */
-          await API.req('users', {method:'PUT', body:DATA.users});
-          SYNC_BASE.__users = syncHash(JSON.stringify(DATA.users));
-          if(temp){
-            await API.req('users/password', {method:'POST', body:{userId:targetId, password:temp}});
-            logActivity(`${CURRENT.name} issued a temporary password for ${name}.`);
-          }
-        }catch(e){ toast('Saved locally, but the server update failed: '+(e.message||'error'),'err'); }
+          /* the row has to exist on the server before a password can attach to it */
+          await API.req('users', {method:'PUT', body:{users:[rec], remove:[]}});
+        }catch(e){ toast('The server refused the new account: '+(e.message||'error'),'err'); return; }
+        try{
+          await API.req('users/'+encodeURIComponent(rec.id)+'/security', {method:'POST', body:{action:'password', password:temp, mustChange:true, revokeSessions:false}});
+        }catch(e){
+          /* roll the row back rather than leaving an account nobody can sign in to,
+             and that this device does not know about either */
+          try{ await API.req('users', {method:'PUT', body:{users:[], remove:[rec.id]}}); }catch(e2){}
+          toast('The account could not be given a password, so it was not created: '+(e.message||'error'),'err');
+          return;
+        }
       }
+      DATA.users.push(rec);
+      if(SYNC_BASE.__users === syncHash(before)) setSynced('__users', JSON.stringify(DATA.users));
+      logActivity(`${CURRENT.name} added new user: ${name} (${role}).`);
+      if(SERVER_MODE) logActivity(`${CURRENT.name} issued a temporary password for ${name}.`);
       saveData(); closeModal(); renderAccess(document.getElementById('view-root'));
-      toast(rec? 'User updated.' : (SERVER_MODE? 'User added - share the temporary password with them.' : 'User added.'));
+      toast(SERVER_MODE? 'User added - share the temporary password with them now.' : 'User added.');
     }}
   ]);
 }
-function deleteUser(userId){
-  if(!(CURRENT.role==='Admin'||isSuper())){ toast('Only Admin/MD or Super User can delete users.','err'); return; }
+/* ---- the Super User's account panel ----
+   One flow for viewing, editing and fixing an account. Profile and Module access
+   edit a draft and are committed together by "Save changes"; the Sign-in & security
+   tab acts immediately, because passwords and sessions cannot be staged or queued
+   offline. State lives in UPANEL and is dropped by closeModal(). */
+let UPANEL = null; /* {id, tab, draft, sec, secErr, pw} */
+
+function openUserPanel(userId, tab){
+  if(!isSuper()){ toast('Only the Super User can open an account.','err'); return; }
+  const u = DATA.users.find(x=>x.id===userId);
+  if(!u){ toast('That account no longer exists.','err'); return; }
+  /* openModal() closes whatever is open first, and closeModal() drops UPANEL, so the
+     panel state is assigned only once the new modal is on screen */
+  openModal('Account · '+(u.name||'user'), `<div id="upanel"></div>`, [
+    {label:'Close', cls:'secondary', action:closeModal},
+    {label:'Save changes', cls:'leaf', action:saveUserPanel},
+  ], {wide:true, compact:true});
+  UPANEL = { id:userId, tab: tab||'profile', sec:null, secErr:null, pw:null, draft:{
+    name:u.name||'', phone:u.phone||'', email:u.email||'', department:u.department||'',
+    role:u.role||'Casual', designation:u.designation||'', status:userStatusOf(u),
+    avatar: u.avatar? JSON.parse(JSON.stringify(u.avatar)) : null,
+    access: (u.access||[]).slice(),
+  }};
+  /* what the draft looked like untouched: the server read below only re-seeds while
+     it still matches, so it can never discard an edit made while it was in flight */
+  UPANEL.seed = JSON.stringify(UPANEL.draft);
+  renderUserPanel();
+  if(serverActionAvailable()) loadAccountSecurity(userId, true);
+}
+function setUserPanelTab(t){ if(!UPANEL) return; captureUserPanelInputs(); UPANEL.tab=t; renderUserPanel(); }
+/* the Profile tab is real DOM: capture what was typed before any re-render */
+function captureUserPanelInputs(){
+  if(!UPANEL || UPANEL.tab!=='profile') return;
+  const g = id => { const el=document.getElementById(id); return el? el.value : null; };
+  const d = UPANEL.draft, set = (k,v,trim)=>{ if(v!==null) d[k] = trim? v.trim() : v; };
+  set('name', g('up-name'), true); set('designation', g('up-desig'), true);
+  set('phone', g('up-phone'), true); set('email', g('up-email'), true);
+  set('department', g('up-dept')); set('role', g('up-role')); set('status', g('up-status'));
+}
+function userPanelRoleChanged(v){ if(!UPANEL) return; captureUserPanelInputs(); UPANEL.draft.role=v; renderUserPanel(); }
+function userPanelStatusChanged(v){ if(!UPANEL) return; captureUserPanelInputs(); UPANEL.draft.status=v; renderUserPanel(); }
+function setPanelAvatar(av){
+  if(!UPANEL) return;
+  UPANEL.draft.avatar = av;
+  const u = DATA.users.find(x=>x.id===UPANEL.id);
+  const p = document.getElementById('up-avatar-preview'); if(p) p.innerHTML = avatarHTML(Object.assign({}, u, {avatar:av}), 64, 20);
+  document.querySelectorAll('#upanel .avatar-opt').forEach(el=>el.classList.toggle('on', !!(av && av.type==='preset' && av.key===el.dataset.key)));
+}
+async function pickPanelPhoto(file){
+  if(!file) return;
+  try{
+    const dataUrl = await downscaleImage(file, 256, 0.85);
+    const stored = await storePhoto(dataUrl);
+    setPanelAvatar(Object.assign({type:'photo'}, stored));
+  }catch(e){ toast('Could not read that image.','err'); }
+}
+function panelToggleModule(key){
+  if(!UPANEL) return;
+  const a = UPANEL.draft.access;
+  UPANEL.draft.access = a.includes(key)? a.filter(k=>k!==key) : [...a, key];
+  renderUserPanel();
+}
+function panelApplyRoleDefaults(){
+  if(!UPANEL) return;
+  UPANEL.draft.access = (ROLE_DEFAULT_ACCESS[UPANEL.draft.role]||['dashboard']).slice();
+  renderUserPanel();
+  toast('Role defaults applied - review them, then save.');
+}
+function panelSetAllModules(on){ if(!UPANEL) return; UPANEL.draft.access = on? ALL_MODULE_KEYS.slice() : ['dashboard']; renderUserPanel(); }
+
+function renderUserPanel(){
+  const host = document.getElementById('upanel'); if(!host || !UPANEL) return;
+  const u = DATA.users.find(x=>x.id===UPANEL.id); if(!u){ closeModal(); return; }
+  const d = UPANEL.draft, self = (u.id===CURRENT.id), last = isLastSuperUser(u.id), live = serverActionAvailable();
+  /* standalone keeps everything in this browser, so every field is editable there.
+     Only a server workspace that cannot currently reach its server has to hold back
+     role, status and module access, because those cannot be queued safely. */
+  const canEditAll = !SERVER_MODE || live;
+  host.innerHTML = `
+  <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-bottom:14px;">
+    ${avatarHTML(Object.assign({}, u, {avatar:d.avatar}), 52, 17)}
+    <div style="min-width:0;flex:1;">
+      <div style="font-family:var(--font-display);font-size:18px;font-weight:700;color:var(--forest-deep);">${esc(d.name||u.name)}</div>
+      <div class="small-muted">${esc(d.designation||'-')}${d.department? ' · '+esc(d.department):''}${d.phone? ' · '+esc(d.phone):''}</div>
+    </div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;flex:none;">${st('gold', d.role)}${userStatusChip({status:d.status})}${self? st('blue','This is you'):''}${last? st('purple','The only Super User left'):''}</div>
+  </div>
+  <div class="tabs">
+    <div class="tab ${UPANEL.tab==='profile'?'active':''}" onclick="setUserPanelTab('profile')">Profile</div>
+    <div class="tab ${UPANEL.tab==='access'?'active':''}" onclick="setUserPanelTab('access')">Module access · ${d.access.length}</div>
+    <div class="tab ${UPANEL.tab==='security'?'active':''}" onclick="setUserPanelTab('security')">Sign-in &amp; security</div>
+  </div>
+  ${UPANEL.tab==='profile'? userPanelProfileHTML(u,d,self,last,canEditAll)
+   : UPANEL.tab==='access'? userPanelAccessHTML(u,d,canEditAll)
+   : userPanelSecurityHTML(u,self,last,live)}`;
+  paintPasswordReveal();
+}
+
+function userPanelProfileHTML(u,d,self,last,canEditAll){
+  const roles = ['Admin','SuperUser','HOD','HR','Finance','Sales','Agronomist','Procurement','Casual','Marketing'];
+  const live = serverActionAvailable();
+  const roleNote = self? 'Sign in from another Super User account to change your own role.'
+    : (last? 'This is the only active Super User. Promote a second one before changing this.'
+    : (canEditAll? 'The role does not rewrite the modules - review them on the Module access tab.' : 'Changing the role needs a connection.'));
+  const statusNote = self? 'You cannot suspend your own account.'
+    : (last? 'The last active Super User cannot be suspended.'
+    : (canEditAll? (SERVER_MODE? 'Suspending signs the account out of every device and blocks the next sign-in.' : 'Suspending blocks the next sign-in on this device.') : 'Changing the status needs a connection.'));
+  return `
+  <div class="form-grid">
+    <div class="field"><label>Full name <span class="req">*</span></label><input id="up-name" value="${esc(d.name)}" autocomplete="off"></div>
+    <div class="field"><label>Designation</label><input id="up-desig" value="${esc(d.designation)}"></div>
+    <div class="field"><label>Phone</label><input id="up-phone" value="${esc(d.phone)}" placeholder="07XXXXXXXX"></div>
+    <div class="field"><label>Email</label><input id="up-email" type="email" value="${esc(d.email)}" placeholder="them@example.com"></div>
+    <div class="field"><label>Department</label><select id="up-dept"><option value="">Not assigned</option>${DATA.departments.map(dp=>`<option ${d.department===dp?'selected':''}>${esc(dp)}</option>`).join('')}</select></div>
+    <div class="field"><label>Role</label>
+      <select id="up-role" ${(self||last||!canEditAll)?'disabled':''} onchange="userPanelRoleChanged(this.value)">${roles.map(r=>`<option value="${r}" ${d.role===r?'selected':''}>${r}</option>`).join('')}</select>
+      <small>${esc(roleNote)}</small></div>
+    <div class="field"><label>Status</label>
+      <select id="up-status" ${(self||last||!canEditAll)?'disabled':''} onchange="userPanelStatusChanged(this.value)">${USER_STATUSES.map(s=>`<option value="${s}" ${d.status===s?'selected':''}>${s==='Pending'?'Pending (awaiting approval)':s}</option>`).join('')}</select>
+      <small>${esc(statusNote)}</small></div>
+    <div class="field field-full"><label>Avatar</label>
+      <div style="display:flex;gap:14px;align-items:center;margin-bottom:10px;flex-wrap:wrap;">
+        <div id="up-avatar-preview">${avatarHTML(Object.assign({}, u, {avatar:d.avatar}), 64, 20)}</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <label class="btn sm secondary" style="cursor:pointer;">Upload photo<input type="file" accept="image/*" style="display:none;" onchange="pickPanelPhoto(this.files[0]); this.value='';"></label>
+          <button type="button" class="btn sm ghost" onclick="setPanelAvatar(null)">Use initials</button>
+        </div>
+      </div>
+      <div class="avatar-grid">${Object.entries(AVATAR_PRESETS).map(([k,v])=>`<div class="avatar-opt ${d.avatar&&d.avatar.type==='preset'&&d.avatar.key===k?'on':''}" data-key="${k}" title="${esc(v.label)}" onclick="setPanelAvatar({type:'preset',key:'${k}'})">${v.svg}</div>`).join('')}</div>
+    </div>
+  </div>
+  <div class="section-title" style="margin-top:18px;">Record<div class="line"></div></div>
+  ${specList([
+    ['Account id', `<span class="mono">${esc(u.id)}</span>`],
+    ['Activity', `<span class="mono">${activityCount(u.id)}</span> logged action${activityCount(u.id)===1?'':'s'}`],
+    ['Badges', badgeChips(u.id) || '<span class="small-muted">None yet</span>'],
+  ])}
+  ${live? '' : `<div class="disclaimer" style="margin-top:14px;">${SERVER_MODE? 'This device cannot reach the workspace server. Name, designation, phone, email, department and avatar still save locally and sync later; role, status and module access need a connection.' : 'This standalone copy stores accounts in this browser only. Role, status and module access save locally; passwords and sessions belong to a deployed workspace.'}</div>`}`;
+}
+
+function userPanelAccessHTML(u,d,canEditAll){
+  const pending = userStatusOf(u)==='Pending';
+  return `
+  ${pending? `<div class="disclaimer" style="margin:0 0 14px;border-color:var(--gold);background:var(--gold-pale);">This registration is still awaiting approval. Approving it from the queue starts the account on the default modules for ${esc(d.role)}; anything you tick here is saved as-is instead.</div>`:''}
+  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:14px;">
+    <button type="button" class="btn sm secondary" onclick="panelApplyRoleDefaults()">Use the ${esc(d.role)} defaults</button>
+    <button type="button" class="btn sm ghost" onclick="panelSetAllModules(true)">Select all</button>
+    <button type="button" class="btn sm ghost" onclick="panelSetAllModules(false)">Dashboard only</button>
+    <span class="small-muted" style="margin-left:auto;"><b class="mono">${d.access.length}</b> of ${ALL_MODULE_KEYS.length} modules</span>
+  </div>
+  ${MODULES.map(g=>`
+    <div class="section-title" style="margin-top:6px;">${esc(g.group)}<div class="line"></div></div>
+    <div class="grid cols-2" style="gap:0 22px;margin-bottom:6px;">
+      ${g.items.map(it=>`<div class="queue-row">
+        <div style="min-width:0;"><div style="font-weight:500;">${esc(it.label)}</div>${g.group==='Admin'? '<div class="small-muted">Administration page</div>':''}</div>
+        <span class="switch ${d.access.includes(it.key)?'on':''}" style="flex:none;" onclick="panelToggleModule('${it.key}')"></span>
+      </div>`).join('')}
+    </div>`).join('')}
+  <div class="disclaimer" style="margin-top:14px;">Module access saves with the rest of the account when you press "Save changes". The matrix at the bottom of Users & Access is the same data, side by side for the whole team.${canEditAll? '' : ' Module access needs a connection, so it will not be sent while this device is offline.'}</div>`;
+}
+
+function userPanelSecurityHTML(u,self,last,live){
+  if(!SERVER_MODE) return `<div class="disclaimer">This standalone copy uses the shared demo password <b class="mono">spn2026</b> for every account, so there is nothing to manage here. Deploy to Cloudflare for per-user passwords, forced first-time changes and live sessions.</div>`;
+  if(!live) return `<div class="disclaimer" style="border-color:var(--danger);background:var(--danger-pale);">${SESSION_EXPIRED? 'Your session has expired. Sign in again to manage passwords and sessions.' : 'This device cannot reach the workspace server. Passwords and sessions cannot be queued offline, so they are unavailable until the connection is back.'}</div>`;
+  if(UPANEL.secErr) return `<div class="disclaimer" style="border-color:var(--danger);background:var(--danger-pale);">Could not read the account state: ${esc(UPANEL.secErr)}</div>`;
+  if(!UPANEL.sec) return `<div class="small-muted" style="padding:18px 0;"><span class="spinner"></span> Reading account state…</div>`;
+  const s = UPANEL.sec;
+  const sev = (!s.hasPassword || s.mustChange)? ' sev-medium' : '';
+  const chip = !s.hasPassword? st('rust','No password set') : (s.mustChange? st('amber','Must change at next sign-in') : st('green','Password set'));
+  return `
+  <div class="analysis-panel${sev}">
+    <div class="ap-head"><span>Sign-in state</span>${chip}</div>
+    <div class="ap-body">
+      <div class="ap-row"><div class="ap-k">Password</div><div class="ap-v">${s.hasPassword? 'Set. The hash never leaves the server and cannot be read back.' : 'Not set. This account cannot sign in until you issue one.'}</div></div>
+      <div class="ap-row"><div class="ap-k">Change at sign-in</div><div class="ap-v">${s.mustChange? 'Required. They will be asked to set their own password next time.' : 'Not required.'}</div></div>
+      <div class="ap-row"><div class="ap-k">Live sessions</div><div class="ap-v"><b class="mono">${s.sessionCount}</b> device${s.sessionCount===1?'':'s'}${s.sessionCount&&s.sessionNewestExpiry? ' · newest expires '+fmtDT(s.sessionNewestExpiry) : ''}</div></div>
+      <div class="ap-row"><div class="ap-k">Last sign-in</div><div class="ap-v">${s.lastLogin? fmtDT(s.lastLogin) : '<span class="small-muted">Never signed in</span>'}</div></div>
+      <div class="ap-row"><div class="ap-k">Record updated</div><div class="ap-v">${s.updatedAt? fmtDT(s.updatedAt) : '<span class="small-muted">-</span>'}</div></div>
+    </div>
+  </div>
+  <div class="section-title" style="margin-top:18px;">Set a password<div class="line"></div></div>
+  <div class="field" style="margin-bottom:10px;">
+    <label>New password <span class="small-muted">(at least 8 characters)</span></label>
+    <input type="password" id="up-pw" autocomplete="new-password" placeholder="Type one, or generate a strong one">
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px;">
+      <button type="button" class="btn sm secondary" onclick="fillGeneratedPassword('up-pw')">Generate</button>
+      <button type="button" class="btn sm ghost" onclick="togglePasswordField('up-pw')">Show / hide</button>
+      <button type="button" class="btn sm ghost" onclick="copyFieldValue('up-pw')">Copy</button>
+    </div>
+  </div>
+  <label class="checkline" style="margin-bottom:6px;"><input type="checkbox" id="up-mustchange" checked> Ask them to set their own password at the next sign-in</label>
+  <label class="checkline" style="margin-bottom:12px;"><input type="checkbox" id="up-revoke" checked> Sign the account out of every ${self?'other ':''}device as well</label>
+  <div id="up-pw-reveal"></div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px;">
+    <button type="button" class="btn sm leaf" onclick="panelSavePassword()">Save password</button>
+    ${(()=>{ /* on your own account this device is not signed out, so it is not offered */
+      const n = self? Math.max(0, s.sessionCount-1) : s.sessionCount;
+      return `<button type="button" class="btn sm secondary" onclick="panelRevokeSessions()" ${n?'':'disabled'}>${self? 'Sign out my other devices' : 'Sign out of every device'}${n? ' ('+n+')' : ''}</button>`;
+    })()}
+    ${s.hasPassword? `<button type="button" class="btn sm secondary" onclick="panelRequireChange(${s.mustChange? 'false':'true'})">${s.mustChange? 'Cancel the forced change' : 'Force a change at next sign-in'}</button>`:''}
+    ${(!self && s.hasPassword && !s.lastSuperUser)? `<button type="button" class="btn sm secondary" style="border-color:var(--danger);color:var(--danger);" onclick="panelClearPassword()">Clear the password</button>`:''}
+  </div>
+  <div class="section-title" style="margin-top:20px;">Danger zone<div class="line"></div></div>
+  <button type="button" class="btn sm rust" onclick="panelDeleteAccount()" ${(self||last)?'disabled':''}>Delete this account…</button>
+  <div class="small-muted" style="margin-top:7px;">${self? 'You cannot delete the account you are signed in with.' : (last? 'This is the only active Super User. Promote a second one before deleting this account.' : 'Removes the profile and every live session. Records they created stay in the workspace.')}</div>
+  <div class="disclaimer" style="margin-top:14px;">Passwords are stored only as salted hashes. A password you set here is shown once, is never written to the audit log or a backup, and cannot be read back afterwards.</div>`;
+}
+
+/* the panel must never edit a ten-minute-old snapshot, and security state is read
+   fresh every time: it is deliberately not part of DATA, so it never reaches
+   saveData(), a backup or /api/state */
+async function loadAccountSecurity(userId, reseed){
+  if(!UPANEL || UPANEL.id!==userId) return;
+  if(!serverActionAvailable()){ UPANEL.sec=null; return; }
+  try{
+    const res = await API.req('users/'+encodeURIComponent(userId)+'/account');
+    if(!UPANEL || UPANEL.id!==userId) return;
+    UPANEL.sec = res.security; UPANEL.secErr = null;
+    if(res.user){
+      adoptServerUser(res.user);
+      /* On the initial open only: the draft was seeded from this device's copy, which
+         may be minutes old. Re-seed it from the server's so saving cannot push a
+         stale name or role back over a newer one. The panel is live while this
+         request is in flight, so anything already typed or toggled wins and the
+         re-seed is skipped rather than silently discarding the operator's work. */
+      if(reseed){
+        captureUserPanelInputs();
+        if(JSON.stringify(UPANEL.draft) === UPANEL.seed){
+          const s = DATA.users.find(x=>x.id===userId) || res.user;
+          UPANEL.draft = {
+            name:s.name||'', phone:s.phone||'', email:s.email||'', department:s.department||'',
+            role:s.role||'Casual', designation:s.designation||'', status:userStatusOf(s),
+            avatar: s.avatar? JSON.parse(JSON.stringify(s.avatar)) : null,
+            access: (s.access||[]).slice(),
+          };
+          UPANEL.seed = JSON.stringify(UPANEL.draft);
+        }
+      }
+    }
+  }catch(e){
+    if(UPANEL && UPANEL.id===userId){ UPANEL.sec=null; UPANEL.secErr = e.message||'error'; }
+  }
+  if(UPANEL && UPANEL.id===userId) renderUserPanel();
+}
+/* adopt the server's copy of this record, but never over local work that has not
+   been pushed yet */
+function adoptServerUser(su){
+  if(usersDirty()) return;
+  const i = DATA.users.findIndex(x=>x.id===su.id);
+  if(i<0) DATA.users.push(su); else DATA.users[i] = su;
+  if(CURRENT && CURRENT.id===su.id) CURRENT = DATA.users.find(x=>x.id===su.id);
+  if(Object.keys(SYNC_BASE).length) setSynced('__users', JSON.stringify(DATA.users));
+}
+/* shown once, built through the DOM with textContent, never through a template
+   literal, never saved to DATA, localStorage or the audit log */
+function paintPasswordReveal(){
+  const host = document.getElementById('up-pw-reveal');
+  if(!host || !UPANEL || !UPANEL.pw) return;
+  host.innerHTML='';
+  const box=document.createElement('div'); box.className='disclaimer';
+  box.style.borderColor='var(--forest)'; box.style.background='var(--mint-soft)'; box.style.margin='0 0 12px';
+  const lead=document.createElement('div'); lead.textContent='Password set. Share it now: it is shown once and cannot be read back.';
+  const code=document.createElement('b'); code.className='mono'; code.style.cssText='display:block;margin:8px 0;font-size:14px;word-break:break-all;'; code.textContent=UPANEL.pw;
+  const btn=document.createElement('button'); btn.type='button'; btn.className='btn sm secondary'; btn.textContent='Copy password';
+  btn.onclick=()=>{ navigator.clipboard.writeText(code.textContent).then(()=>toast('Password copied to the clipboard.')).catch(()=>toast('Could not reach the clipboard.','err')); };
+  box.append(lead, code, btn); host.appendChild(box);
+}
+
+async function panelSavePassword(){
+  if(!UPANEL) return;
+  const u = DATA.users.find(x=>x.id===UPANEL.id); if(!u) return;
+  if(!serverActionAvailable()){ toast('Passwords need a connection to the workspace server.','err'); return; }
+  const el = document.getElementById('up-pw'); const pw = el? el.value : '';
+  if(pw.length<8){ toast('A password must be at least 8 characters.','err'); return; }
+  const mustChange = !!document.getElementById('up-mustchange').checked;
+  const revokeSessions = !!document.getElementById('up-revoke').checked;
+  try{ await API.req('users/'+encodeURIComponent(u.id)+'/security', {method:'POST', body:{action:'password', password:pw, mustChange, revokeSessions}}); }
+  catch(e){ toast('Could not set the password: '+(e.message||'error'),'err'); return; }
+  /* the password itself never reaches logActivity, DATA or the device store */
+  logActivity(`${CURRENT.name} issued a new password for ${u.name}.`);
+  if(mustChange) logActivity(`${CURRENT.name} required ${u.name} to change their password at the next sign-in.`);
+  saveData();
+  /* the operator can close the panel while the request is in flight */
+  if(!UPANEL || UPANEL.id!==u.id){ toast('Password set. The window was closed before it could be shown, so issue another one if you did not note it.','err'); return; }
+  UPANEL.pw = pw; if(el) el.value='';
+  await loadAccountSecurity(u.id);
+  toast(revokeSessions? 'Password set and the account was signed out everywhere.' : 'Password set.');
+}
+async function panelRequireChange(on){
+  if(!UPANEL || !serverActionAvailable()) return;
+  const u = DATA.users.find(x=>x.id===UPANEL.id); if(!u) return;
+  try{ await API.req('users/'+encodeURIComponent(u.id)+'/security', {method:'POST', body:{action:'require-change', mustChange:!!on}}); }
+  catch(e){ toast('Could not update the sign-in requirement: '+(e.message||'error'),'err'); return; }
+  logActivity(on? `${CURRENT.name} required ${u.name} to change their password at the next sign-in.` : `${CURRENT.name} cancelled the forced password change for ${u.name}.`);
+  saveData();
+  await loadAccountSecurity(u.id);
+  toast(on? 'They will be asked to set their own password next time.' : 'The forced change was cancelled.');
+}
+async function panelRevokeSessions(){
+  if(!UPANEL || !serverActionAvailable()) return;
+  const u = DATA.users.find(x=>x.id===UPANEL.id); if(!u) return;
+  const self = u.id===CURRENT.id;
+  if(!confirm(self? 'Sign this account out of every other device? This one keeps working.' : `Sign ${u.name} out of every device? They will have to sign in again.`)) return;
+  let res;
+  try{ res = await API.req('users/'+encodeURIComponent(u.id)+'/security', {method:'POST', body:{action:'revoke-sessions'}}); }
+  catch(e){ toast('Could not sign the account out: '+(e.message||'error'),'err'); return; }
+  logActivity(`${CURRENT.name} signed ${u.name} out of ${res.revoked} device(s).`);
+  saveData();
+  await loadAccountSecurity(u.id);
+  toast(`Signed out of ${res.revoked} device${res.revoked===1?'':'s'}.`);
+}
+async function panelClearPassword(){
+  if(!UPANEL || !serverActionAvailable()) return;
+  const u = DATA.users.find(x=>x.id===UPANEL.id); if(!u) return;
+  if(!confirm(`Clear the password for "${u.name}"? They cannot sign in again until you issue a new one, and every live session ends.`)) return;
+  try{ await API.req('users/'+encodeURIComponent(u.id)+'/security', {method:'POST', body:{action:'clear-password'}}); }
+  catch(e){ toast('Could not clear the password: '+(e.message||'error'),'err'); return; }
+  logActivity(`${CURRENT.name} cleared the password for ${u.name}.`);
+  saveData();
+  await loadAccountSecurity(u.id);
+  toast('Password cleared. Issue a new one when they are ready to sign in.');
+}
+function panelDeleteAccount(){ if(UPANEL) deleteUser(UPANEL.id); }
+
+async function saveUserPanel(){
+  if(!UPANEL) return;
+  captureUserPanelInputs();
+  const u = DATA.users.find(x=>x.id===UPANEL.id);
+  if(!u){ toast('That account no longer exists.','err'); closeModal(); renderAccess(document.getElementById('view-root')); return; }
+  const d = UPANEL.draft, self = (u.id===CURRENT.id), live = serverActionAvailable();
+  /* standalone is entirely local, so everything saves; a disconnected server
+     workspace holds back the fields that must not sit in a queue */
+  const canEditAll = !SERVER_MODE || live;
+  const wasStatus = userStatusOf(u);
+  if(!d.name){ toast('Full name is required.','err'); UPANEL.tab='profile'; renderUserPanel(); return; }
+  if(d.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(d.email)){ toast('That email address does not look right.','err'); UPANEL.tab='profile'; renderUserPanel(); return; }
+  if(!d.access.length){ toast('Give the account at least one module.','err'); UPANEL.tab='access'; renderUserPanel(); return; }
+  if(self && d.role!==u.role){ toast('Sign in from another Super User account to change your own role.','err'); return; }
+  if(self && d.status!==wasStatus){ toast('You cannot change your own status.','err'); return; }
+  if(!self && isLastSuperUser(u.id) && (d.role!=='SuperUser' || d.status!=='Active')){ toast('The workspace must keep at least one active Super User. Promote a second one first.','err'); return; }
+  if(!self && d.status==='Suspended' && wasStatus!=='Suspended' && !confirm(`Suspend "${u.name}"? They are signed out of every device immediately and cannot sign in until you reactivate the account.`)) return;
+  const before = JSON.stringify(DATA.users);
+  /* offline keeps the fields that merge safely; role, status and module access are
+     decisions that must not sit in a queue for hours */
+  const patch = canEditAll
+    ? {name:d.name, phone:d.phone, email:d.email, department:d.department, designation:d.designation, role:d.role, status:d.status, avatar:d.avatar, access:d.access.slice()}
+    : {name:d.name, phone:d.phone, email:d.email, department:d.department, designation:d.designation, avatar:d.avatar};
+  if(live){
+    if(patch.avatar && patch.avatar.type==='photo' && String(patch.avatar.src||'').startsWith('data:')){
+      try{
+        const r = await API.req('files', {method:'POST', body:{mime:'image/jpeg', data:patch.avatar.src.split(',')[1]}});
+        patch.avatar = {type:'photo', src:'/api/files/'+r.id, fileId:r.id};
+      }catch(e){ toast('Could not upload the photo: '+(e.message||'error'),'err'); return; }
+    }
+    let saved;
+    try{ saved = await API.req('users/'+encodeURIComponent(u.id), {method:'PUT', body:patch}); }
+    catch(e){ toast('The server refused the change: '+(e.message||'error'),'err'); return; }
+    DATA.users[DATA.users.findIndex(x=>x.id===u.id)] = saved.user;
+    if(SYNC_BASE.__users === syncHash(before)) setSynced('__users', JSON.stringify(DATA.users));
+  }else{
+    /* an avatar picked without a connection is still an inline data: URL. The
+       self-service photo queue only ever covers your own record, so rather than
+       syncing a base64 image into someone else's user row, the photo is dropped and
+       the rest of the edit is kept. */
+    if(SERVER_MODE && patch.avatar && patch.avatar.type==='photo' && String(patch.avatar.src||'').startsWith('data:')){
+      delete patch.avatar;
+      toast('The photo needs a connection to upload, so it was not applied. The other details were saved.','err');
+    }
+    Object.assign(u, patch);
+  }
+  const fresh = DATA.users.find(x=>x.id===UPANEL.id);
+  logActivity(`${CURRENT.name} updated the account of ${fresh.name} - role ${fresh.role}, status ${userStatusOf(fresh)}, ${(fresh.access||[]).length} module(s).`);
+  if(canEditAll && d.status!==wasStatus && d.status==='Suspended') logActivity(`${CURRENT.name} suspended the account of ${fresh.name}.`);
+  if(canEditAll && d.status!==wasStatus && d.status==='Active') logActivity(`${CURRENT.name} reactivated the account of ${fresh.name}.`);
+  saveData();
+  const wasSelf = self;
+  closeModal();
+  if(wasSelf) applyOwnRecord(fresh); else renderAccess(document.getElementById('view-root'));
+  toast(canEditAll? 'Account updated.' : 'Account updated on this device. Role, status and module access need a connection.');
+}
+/* the signed-in user edited their own record: everything the shell already drew from
+   CURRENT has to be redrawn, or the UI keeps offering rights that are gone */
+function applyOwnRecord(u){
+  CURRENT = u;
+  const av=document.getElementById('uc-avatar'); if(av) av.innerHTML = avatarInner(CURRENT);
+  const nm=document.getElementById('uc-name'); if(nm) nm.textContent = CURRENT.name;
+  const rl=document.getElementById('uc-role'); if(rl) rl.textContent = CURRENT.designation;
+  buildSidebar();
+  const access = CURRENT.access || [];
+  const key = document.querySelector('.sb-item.active')?.dataset.key;
+  nav((key && access.includes(key))? key : (access.includes('dashboard')? 'dashboard' : (access[0]||'dashboard')), {keepScroll:true});
+}
+
+async function deleteUser(userId){
+  if(!isSuper()){ toast('Only the Super User can delete accounts.','err'); return; }
   if(userId===CURRENT.id){ toast("You can't delete your own account while signed in.",'err'); return; }
   const u = DATA.users.find(x=>x.id===userId);
   if(!u) return;
-  if(!confirm(`Delete user "${u.name}"? This cannot be undone.`)) return;
-  DATA.users = DATA.users.filter(x=>x.id!==userId);
-  logActivity(`${CURRENT.name} deleted user: ${u.name}.`);
-  if(SERVER_MODE && API.token){
-    API.req('users', {method:'PUT', body:{users:DATA.users, remove:[userId]}})
-      .then(()=>{ SYNC_BASE.__users = syncHash(JSON.stringify(DATA.users)); })
-      .catch(e=>toast('Server update failed: '+(e.message||'error'),'err'));
+  if(isLastSuperUser(userId)){ toast('The last active Super User cannot be deleted. Promote another one first.','err'); return; }
+  if(SERVER_MODE && !serverActionAvailable()){ toast('Deleting an account needs a connection to the workspace: it cannot be queued offline.','err'); return; }
+  if(!confirm(`Delete user "${u.name}"? Their profile and every live session are removed. This cannot be undone.`)) return;
+  if(SERVER_MODE){
+    /* the row and its sessions must be gone before the local list drops it, or the
+       next pull simply resurrects the account */
+    try{ await API.req('users/'+encodeURIComponent(userId), {method:'DELETE'}); }
+    catch(e){ toast('The server refused the deletion: '+(e.message||'error'),'err'); return; }
   }
+  const before = JSON.stringify(DATA.users);
+  DATA.users = DATA.users.filter(x=>x.id!==userId);
+  if(SYNC_BASE.__users === syncHash(before)) setSynced('__users', JSON.stringify(DATA.users));
+  logActivity(`${CURRENT.name} deleted user: ${u.name}.`);
   saveData();
+  closeModal();
   renderAccess(document.getElementById('view-root'));
   toast('User deleted.');
 }
 function decideAccessRequest(id, decision){
+  if(!canManage()){ toast('Only Admin/MD or the Super User can decide access requests.','err'); return; }
   const req = DATA.accessRequests.find(r=>r.id===id);
   if(!req) return;
   req.status = decision;
@@ -7233,15 +8174,34 @@ function decideAccessRequest(id, decision){
   else renderDashboard(document.getElementById('view-root'));
   toast('Request '+decision.toLowerCase()+'.');
 }
-function toggleAccess(userId, key){
+async function toggleAccess(userId, key){
   if(!(CURRENT.role==='Admin'||isSuper())){ toast('Only Admin/MD or Super User can edit the access matrix.','err'); return; }
   const u = DATA.users.find(x=>x.id===userId);
+  if(!u) return;
+  u.access = u.access || [];
   const has = u.access.includes(key);
-  u.access = has? u.access.filter(k=>k!==key) : [...u.access, key];
+  const next = has? u.access.filter(k=>k!==key) : [...u.access, key];
+  /* an account with no modules cannot reach anything, not even the dashboard */
+  if(!next.length){ toast('Every account keeps at least one module.','err'); return; }
+  const before = JSON.stringify(DATA.users);
+  u.access = next;
+  if(serverActionAvailable() && isSuper()){
+    try{
+      const res = await API.req('users/'+encodeURIComponent(userId), {method:'PUT', body:{access:next}});
+      DATA.users[DATA.users.findIndex(x=>x.id===userId)] = res.user;
+      if(SYNC_BASE.__users === syncHash(before)) setSynced('__users', JSON.stringify(DATA.users));
+    }catch(e){
+      u.access = has? [...next, key] : next.filter(k=>k!==key);
+      toast('The server refused the change: '+(e.message||'error'),'err');
+      renderAccess(document.getElementById('view-root'));
+      return;
+    }
+  }
   logActivity(`${CURRENT.name} ${has?'revoked':'granted'} "${key}" access for ${u.name}.`);
   saveData();
+  const fresh = DATA.users.find(x=>x.id===userId);
+  if(CURRENT.id===userId){ applyOwnRecord(fresh); toast('Access updated.'); return; }
   renderAccess(document.getElementById('view-root'));
-  if(CURRENT.id===userId){ CURRENT.access = u.access; buildSidebar(); nav(document.querySelector('.sb-item.active')?.dataset.key || 'dashboard', {keepScroll:true}); }
   toast('Access updated.');
 }
 
@@ -7302,6 +8262,7 @@ function renderProfile(root){
     </div>
     ${specList([
       ['Role', st('gold', CURRENT.role)],
+      ['Status', userStatusChip(CURRENT)],
       ['Department', CURRENT.department? esc(CURRENT.department) : 'Not assigned'],
       ['Phone', CURRENT.phone? esc(CURRENT.phone) : '-'],
       ['Email', CURRENT.email? esc(CURRENT.email) : '-'],
@@ -7410,6 +8371,66 @@ async function flushPendingProfile(){
   if(res && res.user) applyProfile(res.user.id, res.user);
   try{ localStorage.removeItem(PENDING_PROFILE_KEY); }catch(e){}
   updateOfflineChip();
+}
+
+/* ================= BACKUP & RESTORE (Super User) ================= */
+function buildBackup(){ const collections = {}; COLLECTION_KEYS.forEach(k=>{ collections[k] = DATA[k]; }); return {kind:'spn-erp-backup', version:2, exportedAt:new Date().toISOString(), org:orgProfile().name, users:DATA.users, collections}; }
+async function downloadBackup(){
+  if(!isSuper()) return;
+  let dump = buildBackup();
+  if(SERVER_MODE && !OFFLINE){ try{ dump = await API.req('backup'); }catch(e){} } /* the server copy is authoritative when reachable */
+  const blob = new Blob([JSON.stringify(dump, null, 1)], {type:'application/json'});
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'SPN-Backup-'+todayISO()+'.json';
+  document.body.appendChild(a); a.click(); a.remove();
+  logActivity('Downloaded a workspace backup.'); saveData();
+}
+function openEmailBackupModal(){
+  if(!isSuper()) return;
+  openModal('Email the backup', `
+    <p class="small-muted" style="margin:0 0 10px;">The backup is sent as a JSON attachment from the workspace email address${EMAIL_ENABLED? '' : ' - <b>email sending is not configured</b> on this deployment (set EMAIL_FROM in wrangler.jsonc), so sending will fail; download the backup instead'}.</p>
+    <div class="field"><label>Send to (comma-separated emails)</label><input id="bk-emails" value="${esc(CURRENT.email||'')}" placeholder="md@example.com, it@example.com"></div>
+  `, [
+    {label:'Cancel', cls:'secondary', action:closeModal},
+    {label:'Send backup', cls:'leaf', action: async ()=>{
+      const to = document.getElementById('bk-emails').value.split(',').map(s=>s.trim()).filter(Boolean);
+      if(!to.length){ toast('Give at least one email address.','err'); return; }
+      if(!SERVER_MODE || OFFLINE){ toast('Emailing needs the deployed (Cloudflare) workspace online - download the backup instead.','err'); return; }
+      toast('Building and sending the backup…');
+      try{
+        const r = await API.req('backup/email', {method:'POST', body:{to}});
+        closeModal(); toast(`Backup emailed to ${r.sent} recipient${r.sent===1?'':'s'} (${fmtBytes(r.size)}).`);
+        logActivity('Emailed a workspace backup to '+to.join(', ')+'.'); saveData();
+      }catch(e){ toast('Could not email the backup: '+e.message,'err'); }
+    }}
+  ]);
+}
+async function restoreBackupFile(file){
+  if(!isSuper() || !file) return;
+  let dump = null;
+  try{ dump = JSON.parse(await file.text()); }catch(e){}
+  if(!dump || dump.kind!=='spn-erp-backup' || !dump.collections){ toast('That file is not an SPN ERP backup.','err'); return; }
+  const when = dump.exportedAt? new Date(dump.exportedAt).toLocaleString('en-KE') : 'an unknown date';
+  if(!confirm('Restore the workspace from this backup (exported '+when+')?\nModule data is REPLACED by the backup; accounts are updated and keep their existing passwords. This cannot be undone.')) return;
+  try{
+    if(SERVER_MODE){
+      SYNCING = true; /* nothing may sync the pre-restore memory state over the restored server data before the reload */
+      await API.req('restore', {method:'POST', body:dump});
+      try{ localStorage.removeItem(STORE_KEY); }catch(e){}
+    } else {
+      COLLECTION_KEYS.forEach(k=>{ if(k in dump.collections) DATA[k] = dump.collections[k]; });
+      if(Array.isArray(dump.users) && dump.users.length) DATA.users = dump.users;
+      logActivity('Restored the workspace from a backup (exported '+when+').');
+      await store.set(STORE_KEY, JSON.stringify(DATA));
+    }
+    clearLocalSyncState();
+    toast('Backup restored - reloading…');
+    setTimeout(()=>location.reload(), 900);
+  }catch(e){
+    /* the reload never happens on failure, so the sync freeze has to be lifted here
+       or every later save is silently dropped for the rest of the session */
+    SYNCING = false;
+    toast('Restore failed: '+e.message,'err');
+  }
 }
 
 /* ================= SPN OS app releases (Android APK on R2) ================= */
@@ -7563,7 +8584,7 @@ async function bootOffline(){
     return;
   }
   if(!cached) DATA = emptyWorkspace();
-  LOGIN_DIRECTORY = (DATA && Array.isArray(DATA.users)) ? DATA.users.map(u=>({id:u.id, name:u.name, role:u.role, designation:u.designation, status:u.status||'Active', hasPassword:true})) : [];
+  LOGIN_DIRECTORY = (DATA && Array.isArray(DATA.users)) ? DATA.users.map(u=>({id:u.id, name:u.name, role:u.role, designation:u.designation, status:userStatusOf(u)})) : [];
   renderLogin();
   scheduleReconnect(8000);
 }
