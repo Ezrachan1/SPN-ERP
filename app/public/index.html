@@ -186,6 +186,11 @@ a{color:var(--gold-deep);}
 .sb-item.active svg{opacity:1;color:var(--forest);}
 .sb-item.locked{opacity:.38;}
 .sb-foot{flex:none;padding:13px 18px;border-top:1px solid rgba(255,255,255,0.07);font-size:10.6px;color:#7C8B74;line-height:1.5;}
+.sb-foot .credit{display:block;margin-top:7px;color:#66755F;font-size:9.8px;letter-spacing:.05em;text-decoration:none;text-transform:uppercase;}
+.sb-foot .credit:hover{color:#C6D0BE;}
+.credit-line{margin-top:12px;font-size:10.5px;}
+.credit-line a{color:var(--faint);text-decoration:none;letter-spacing:.03em;}
+.credit-line a:hover{color:var(--forest);}
 
 .main{display:flex;flex-direction:column;min-width:0;min-height:0;background:var(--bg);}
 .topbar{
@@ -1693,12 +1698,12 @@ function renderLogin(){
       </form>
       <div class="demo-strip">
         <div class="ds-label">First time here?</div>
-        <button type="button" class="demo-chip" onclick="setLoginView('register')">Register your account · pick your role</button>
+
       </div>
       ${OFFLINE? `<div class="app-link" style="background:#FBEFD9;border-color:#E3C892;color:#7A5A12;">You are offline. Signing in needs a connection; if you signed in before on this device, SPN OS opens automatically while offline. <a href="#" onclick="tryReconnect(true);return false;" style="color:#7A5A12;">Retry</a></div>` : ''}
       <div id="login-app-link"></div>
       <div class="app-link pwa-install-hint" style="${PWA_PROMPT? '' : 'display:none;'}">💻 <b>Install SPN OS on this device</b> <a href="#" onclick="installPWA();return false;">Install</a><span class="small-muted">Opens like an app from your home screen or desktop; works offline.</span></div>
-      <div class="login-foot">You stay signed in on this browser for up to 7 days. Passwords are set once at registration and work on every device.</div>`;
+      <div class="login-foot">You stay signed in on this browser for up to 7 days. Accounts are created by your administrator (Users & Access or an invitation link).<div class="credit-line"><a href="https://savlicon.co.ke" target="_blank" rel="noopener">Powered by Savlicon</a></div></div>`;
     refreshLoginDirectory();
     loadAppLink('login-app-link');
     return;
@@ -1724,7 +1729,7 @@ function renderLogin(){
       <div class="ds-label">Quick demo access · password auto-filled</div>
       <div class="demo-chips">${DATA.users.filter(u=>isSafeId(u.id) && isActiveUser(u)).map(u=>`<button type="button" class="demo-chip" onclick="quickLogin('${esc(u.id)}')">${esc(u.name.split(' ')[0])} · ${esc(u.role)}</button>`).join('')}</div>
     </div>
-    <div class="login-foot">Demo workspace: data is saved to your browser. Demo password for all accounts: <b class="mono">spn2026</b>. Deploy to Cloudflare for the production database and per-user passwords.</div>`;
+    <div class="login-foot">Demo workspace: data is saved to your browser. Demo password for all accounts: <b class="mono">spn2026</b>. Deploy to Cloudflare for the production database and per-user passwords.<div class="credit-line"><a href="https://savlicon.co.ke" target="_blank" rel="noopener">Powered by Savlicon</a></div></div>`;
   loadAppLink('login-app-link');
 }
 function quickLogin(userId){
@@ -1971,7 +1976,7 @@ function buildSidebar(){
   const regionEl = document.querySelector('.sb-brand div span');
   if(regionEl) regionEl.textContent = org.region;
   const footEl = document.querySelector('.sb-foot');
-  if(footEl) footEl.innerHTML = esc(org.name)+'<br>'+esc(org.region);
+  if(footEl) footEl.innerHTML = esc(org.name)+'<br>'+esc(org.region)+'<a class="credit" href="https://savlicon.co.ke" target="_blank" rel="noopener">Powered by Savlicon</a>';
 }
 /* Sidebar detach: on desktop the toggle collapses the sidebar so the content
    takes the full width (preference remembered); on mobile the sidebar is an
@@ -2578,17 +2583,24 @@ function renderDashboard(root){
     <div class="date-chip">${ICONS.calendar}${new Date().toLocaleDateString('en-KE',{day:'numeric',month:'long',year:'numeric'})}</div>
   </div>
   <div class="bento">
-    <div class="card kpi b3">
+    ${(()=>{
+      /* per-batch tray conversion, each crop with its own tray size (price list or
+         last tray sale); batches without a known tray size stay as seedlings */
+      let trays = 0, converted = 0;
+      stockRows.filter(x=>x.c.stage===4 && x.viableQty>0).forEach(x=>{ const ts = traySizeFor(x.r.crop+' '+x.r.variety); if(ts){ trays += Math.floor(x.viableQty/ts); converted += x.viableQty; } });
+      const rest = readySeedlings - converted;
+      return `<div class="card kpi b3">
       <div class="kpi-row"><div class="kpi-icon">${ICONS.stock}</div>${st('green','Ready')}</div>
-      <div class="k-label">Total Seedlings Ready</div>
-      <div class="k-value">${readySeedlings.toLocaleString()}</div>
-      <div class="k-sub">of ${totalSeedlings.toLocaleString()} viable est. in nursery</div>
-    </div>
+      <div class="k-label">${trays? 'Trays Ready for Sale' : 'Total Seedlings Ready'}</div>
+      <div class="k-value">${trays? '≈ '+trays.toLocaleString() : readySeedlings.toLocaleString()}</div>
+      <div class="k-sub">${trays? readySeedlings.toLocaleString()+' seedlings'+(rest>0? ' ('+rest.toLocaleString()+' without a tray size)':'')+' · ' : ''}of ${totalSeedlings.toLocaleString()} viable est. in nursery</div>
+    </div>`;
+    })()}
     <div class="card kpi b3">
       <div class="kpi-row"><div class="kpi-icon">${ICONS.sale}</div>${salesDelta!=null? `<span class="k-delta ${salesDelta>=0?'up':'down'}">${salesDelta>=0?'↑':'↓'} ${Math.abs(salesDelta)}%</span>`:''}</div>
       <div class="k-label">Today's Sales</div>
       <div class="k-value">${money(todaySales)}</div>
-      <div class="k-sub">${salesDelta!=null? 'vs yesterday · ':''}${DATA.cashSales.length} receipts recorded total</div>
+      <div class="k-sub">${salesDelta!=null? 'vs yesterday · ':''}${DATA.cashSales.filter(s=>s.date===todayISO()).reduce((a,s)=>a+saleTraysTotal(s),0).toLocaleString()} trays today · ${DATA.cashSales.length} receipts total</div>
     </div>
     <div class="card kpi b3">
       <div class="kpi-row"><div class="kpi-icon">${ICONS.leads}</div>${canEditTarget?`<button class="btn sm ghost" onclick="editLeadsTarget()" title="Set monthly target" style="padding:3px 8px;">Edit</button>`:''}</div>
@@ -2645,11 +2657,11 @@ function renderDashboard(root){
       ${readiness.length? readiness.map(({r,c,viableQty})=>`
         <div class="readiness-row">
           <span class="rr-dot" style="background:${CROP_COLORS[r.crop]||'var(--sage)'};"></span>
-          <div class="rr-name">${esc(r.variety)}<span>${esc(r.crop)} · ${viableQty.toLocaleString()} seedlings</span></div>
+          <div class="rr-name">${esc(r.variety)}<span>${esc(r.crop)} · ${traysOfLabel(r.crop+' '+r.variety, viableQty)}</span></div>
           <div class="progress-line" style="flex:1;"><i style="width:${c.pct}%;background:${CROP_COLORS[r.crop]||'var(--sage)'};"></i></div>
           <span class="rr-pct">${c.pct}%</span>
         </div>`).join('') : '<div class="small-muted">No sowing records yet.</div>'}
-      <div class="small-muted" style="margin-top:8px;">Growth progress toward transplant-ready, by batch. Germination rates are in Nursery Health on the batch detail.</div>
+      <div class="small-muted" style="margin-top:8px;">Growth progress toward transplant-ready, by batch. Tray counts use the tray size from the POS price list (or the crop's last tray sale); crops without one show seedlings. Germination rates are in Nursery Health on the batch detail.</div>
     </div>
 
     <div class="card b6">
@@ -3078,6 +3090,7 @@ function openSaleDrawer(id){
     ${specList([
       ['Customer', `<b>${esc(s.customer)}</b>`],
       ['Phone', esc(s.phone)||'-'],
+      ['Email', esc(s.email||'')||'-'],
       ['Customer KRA PIN', s.kraPin?`<span class="mono">${esc(s.kraPin)}</span>`:'-'],
       ['Company KRA PIN', DATA.companyKraPin?`<span class="mono">${esc(DATA.companyKraPin)}</span>`:'Not set'],
       ['Items', `<table style="width:100%;font-size:12px;">${saleItems(s).map(it=>`<tr><td>${esc(it.crop)}</td><td class="mono" style="text-align:right;white-space:nowrap;">${esc(itemQtyLabel(it))}</td><td class="mono" style="text-align:right;white-space:nowrap;">@ ${money(it.unitPrice)}</td><td class="mono" style="text-align:right;white-space:nowrap;">${money(it.total)}</td></tr>`).join('')}</table>`],
@@ -3091,6 +3104,8 @@ function openSaleDrawer(id){
     ])}
   `, [
     {label:'⬇ Download receipt (PDF)', cls:'leaf', action:()=>downloadReceiptPDF(s.id)},
+    waNumber(s.phone)? {label:'WhatsApp receipt', cls:'secondary', action:()=>whatsappReceipt(s.id)} : null,
+    {label:'Email receipt', cls:'secondary', action:()=>emailReceipt(s.id, true)},
     isSuper()? {label:'Delete record', cls:'rust', action:()=>deleteRecord('cashSales', s.id, 'renderCashSale')} : null,
     {label:'Close', cls:'secondary', action:closeDrawer},
   ].filter(Boolean));
@@ -3109,10 +3124,10 @@ function scopedSales(){
   return CURRENT.role==='Sales' ? DATA.cashSales.filter(s=>s.servedBy===CURRENT.name) : DATA.cashSales;
 }
 /* A5 customer receipt with the SPN logo letterhead */
-function downloadReceiptPDF(id){
+function buildReceiptPDF(id){
   const s = DATA.cashSales.find(x=>x.id===id);
-  if(!s){ toast('Sale not found.','err'); return; }
-  if(typeof window.jspdf==='undefined'){ toast('PDF library unavailable - check your connection.','err'); return; }
+  if(!s){ toast('Sale not found.','err'); return null; }
+  if(typeof window.jspdf==='undefined'){ toast('PDF library unavailable - check your connection.','err'); return null; }
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({format:'a5'});
   const org = orgProfile();
@@ -3170,8 +3185,70 @@ function downloadReceiptPDF(id){
   y += 9;
   doc.setFontSize(8.6); doc.setTextColor(38,53,42);
   doc.text('Thank you for growing with '+org.name+'.', 12, y);
-  doc.save(`SPN_Receipt_${s.receiptNo}.pdf`);
-  logActivity(`Downloaded receipt ${s.receiptNo} (PDF).`);
+  return {doc, fname:`SPN_Receipt_${s.receiptNo}.pdf`, s};
+}
+function downloadReceiptPDF(id){
+  const r = buildReceiptPDF(id); if(!r) return;
+  r.doc.save(r.fname); /* in the SPN OS app this opens the share sheet (WhatsApp attaches the PDF) */
+  logActivity(`Downloaded receipt ${r.s.receiptNo} (PDF).`);
+}
+/* ---------- sharing the receipt with the customer ---------- */
+function waNumber(phone){
+  let p = String(phone||'').replace(/[^\d+]/g,'');
+  if(!p) return null;
+  if(p.startsWith('+')) p = p.slice(1);
+  else if(p.startsWith('0')) p = '254'+p.slice(1);
+  else if(!p.startsWith('254') && p.length<=9) p = '254'+p;
+  return /^\d{10,15}$/.test(p) ? p : null;
+}
+function receiptText(s){
+  const org = orgProfile();
+  const lines = saleItems(s).map(it=>`- ${it.crop}: ${itemQtyLabel(it)} @ ${money(it.unitPrice)} = ${money(it.total)}`).join('\n');
+  return `${org.name} - Receipt ${s.receiptNo}\n${fmtDate(s.date)} · ${s.customer}\n${lines}\nTOTAL: ${money(s.total)} (${s.payment})\n${s.vat}\nThank you for growing with ${org.name}.`;
+}
+function whatsappReceipt(id){
+  const s = DATA.cashSales.find(x=>x.id===id); if(!s) return;
+  const n = waNumber(s.phone);
+  if(!n){ toast('No valid customer phone number on this sale.','err'); return; }
+  window.open('https://wa.me/'+n+'?text='+encodeURIComponent(receiptText(s)), '_blank');
+  logActivity(`Shared receipt ${s.receiptNo} to WhatsApp (${s.customer}).`);
+}
+async function emailReceipt(id, promptIfMissing){
+  const s = DATA.cashSales.find(x=>x.id===id); if(!s) return;
+  let to = (s.email||'').trim();
+  if(!to && promptIfMissing) to = (prompt('Customer email address for the receipt:')||'').trim();
+  if(!to) return;
+  if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)){ toast('That email address does not look right.','err'); return; }
+  if(SERVER_MODE && !OFFLINE && EMAIL_ENABLED){
+    try{
+      const r = buildReceiptPDF(id); if(!r) return;
+      toast('Emailing the receipt…');
+      const b64 = r.doc.output('datauristring').split(',')[1];
+      await API.req('email-receipt', {method:'POST', body:{to, receiptNo:s.receiptNo, fileName:r.fname, pdfBase64:b64, text:receiptText(s)}});
+      if(!s.email){ s.email = to; saveData(); }
+      logActivity(`Emailed receipt ${s.receiptNo} to ${to}.`);
+      toast('Receipt (PDF) emailed to '+to+'.');
+      return;
+    }catch(e){
+      if(isNetworkError(e)){ toast('Offline - opening your email app with a text receipt instead.','err'); }
+      else { toast('Email failed ('+e.message+') - opening your email app instead.','err'); }
+    }
+  }
+  location.href = 'mailto:'+encodeURIComponent(to)+'?subject='+encodeURIComponent('Receipt '+s.receiptNo+' - '+orgProfile().name)+'&body='+encodeURIComponent(receiptText(s));
+}
+/* offered right after a sale is recorded */
+function offerReceiptShare(id){
+  const s = DATA.cashSales.find(x=>x.id===id); if(!s) return;
+  const hasWa = !!waNumber(s.phone);
+  openModal('Share the receipt?', `
+    <p class="small-muted" style="margin:0 0 12px;">Receipt <b class="mono">${esc(s.receiptNo)}</b> · ${esc(s.customer)} · <b>${money(s.total)}</b></p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+      ${hasWa? `<button class="btn sm leaf" onclick="whatsappReceipt('${s.id}')">WhatsApp${SPN_CONFIG.mobile? '' : ' (text receipt)'}</button>` : ''}
+      <button class="btn sm secondary" onclick="emailReceipt('${s.id}', true)">Email${EMAIL_ENABLED? ' PDF' : ''} receipt</button>
+      <button class="btn sm secondary" onclick="downloadReceiptPDF('${s.id}')">${SPN_CONFIG.mobile? 'Share PDF…' : 'Download PDF'}</button>
+    </div>
+    ${SPN_CONFIG.mobile? '<small class="small-muted" style="display:block;margin-top:10px;">"Share PDF…" opens the phone share sheet - pick WhatsApp there to send the PDF itself.</small>' : (hasWa? '<small class="small-muted" style="display:block;margin-top:10px;">WhatsApp on the web sends a text receipt; use Download PDF to attach the file yourself.</small>' : '')}
+  `, [{label:'Done', cls:'secondary', action:closeModal}]);
 }
 function exportCashSalesExcel(){
   if(typeof XLSX==='undefined'){ toast('Excel library unavailable - check your connection.','err'); return; }
@@ -3289,6 +3366,32 @@ function itemQtyLabel(it){
 }
 function saleSummary(s){ const its = saleItems(s); return its.length===1? its[0].crop : `${its[0].crop} + ${its.length-1} more`; }
 function saleQtyTotal(s){ return saleItems(s).reduce((a,it)=>a+(+it.qty||0),0); }
+function saleTraysTotal(s){ return saleItems(s).reduce((a,it)=> a + (it.unit==='trays'? (+it.qty||0) : 0), 0); }
+/* seedlings-per-tray for a crop: the POS price list first, then the most recent
+   tray sale of that crop; null when the workspace has never defined one */
+function traySizeFor(crop){
+  const c = String(crop||'').toLowerCase();
+  const pl = (DATA.priceList||[]).find(p=>{
+    if(p.unit!=='trays' || !(+p.traySize>0)) return false;
+    const name = (p.name||'').toLowerCase();
+    if(name.includes(c)) return true;
+    /* "Tomato seedlings (tray)" should match the crop "Tomato Zara F1" */
+    const base = name.replace(/(seedlings?|trays?)/g,' ').replace(/[^a-z0-9]+/g,' ').trim();
+    return !!base && base.split(/\s+/).every(w=>c.includes(w));
+  });
+  if(pl) return +pl.traySize;
+  for(let i=DATA.cashSales.length-1; i>=0; i--){
+    for(const it of saleItems(DATA.cashSales[i])){
+      if(it.unit==='trays' && +it.traySize>0 && (it.crop||'').toLowerCase().includes(c)) return +it.traySize;
+    }
+  }
+  return null;
+}
+function traysOfLabel(crop, seedlings){
+  const ts = traySizeFor(crop);
+  return ts? '≈ '+Math.floor((+seedlings||0)/ts).toLocaleString()+' trays of '+ts : (+seedlings||0).toLocaleString()+' seedlings';
+}
+function saleLooseSeedlings(s){ return saleItems(s).reduce((a,it)=> a + ((it.unit||'seedlings')==='seedlings'? (+it.qty||0) : 0), 0); }
 function saleSeedlingsTotal(s){ return saleItems(s).reduce((a,it)=>a+itemSeedlings(it),0); }
 let SALE_DRAFT = [];
 function newSaleRow(batchId){
@@ -3368,6 +3471,7 @@ function openSaleModal(batchId){
       <div class="field"><label>Date</label><input type="date" id="f-date" value="${todayISO()}"></div>
       <div class="field"><label>Customer Name <span class="req">*</span></label><input id="f-cust" placeholder="e.g. John Mwangi"></div>
       <div class="field"><label>Phone</label><input id="f-phone" placeholder="07XXXXXXXX"></div>
+      <div class="field"><label>Email <span class="small-muted">(optional - for the e-receipt)</span></label><input id="f-email" type="email" placeholder="customer@email.com"></div>
       <div class="field"><label>KRA PIN <span class="small-muted">(optional)</span></label><input id="f-pin" placeholder="A0XXXXXXXXB"></div>
       <div class="field"><label>Payment Method</label><select id="f-pay"><option>M-Pesa</option><option>Cash</option><option>Bank Transfer</option></select></div>
       <div class="field field-full"><label>Customer Location <span class="small-muted">(type it, or use GPS below)</span></label><input id="f-location" placeholder="e.g. Mogotio Town, near..."></div>
@@ -3412,7 +3516,7 @@ function openSaleModal(batchId){
       const vatAmount = vatTreatment==='Standard 16%' ? Math.round(total - total/1.16) : 0; /* prices are VAT-inclusive at the POS */
       const newSaleId = uid('cs');
       DATA.cashSales.push({id:newSaleId, receiptNo:document.getElementById('f-receipt').value, date:document.getElementById('f-date').value || todayISO(),
-        customer:cust, phone:document.getElementById('f-phone').value, kraPin:document.getElementById('f-pin').value,
+        customer:cust, phone:document.getElementById('f-phone').value, email:(document.getElementById('f-email')?.value||'').trim(), kraPin:document.getElementById('f-pin').value,
         location:document.getElementById('f-location').value||'',
         items, crop: items.map(it=>it.crop).join(', ').slice(0,140), qty: items.reduce((a,it)=>a+(it.seedlings!=null? it.seedlings : it.qty),0),
         unitPrice: items.length===1? items[0].unitPrice : null, total, vatAmount,
@@ -3421,6 +3525,7 @@ function openSaleModal(batchId){
         customerLat: hasGps?gpsVal[0]:null, customerLng: hasGps?gpsVal[1]:null});
       logActivity(`Recorded cash sale ${document.getElementById('f-receipt').value} for ${cust} (${items.length} item${items.length===1?'':'s'}, ${money(total)}).`);
       closeModal(); renderCashSale(document.getElementById('view-root')); toast('Sale recorded.');
+      offerReceiptShare(newSaleId);
       setTimeout(()=>openSaleDrawer(newSaleId), 150);
     }}
   ], {wide:true});
@@ -3855,7 +3960,7 @@ function openClientDrawer(id){
     ${specList([
       ['Score', `<span class="mono">${c.score}/100</span> ${tierChip(c.tier)}`],
       ['Purchases', `<span class="mono">${c.txns}</span> receipt(s)`],
-      ['Seedlings bought', `<span class="mono">${c.qty.toLocaleString()}</span>`],
+      ['Bought', `<span class="mono">${c.sales.reduce((a,s)=>a+saleTraysTotal(s),0).toLocaleString()}</span> trays · <span class="mono">${c.qty.toLocaleString()}</span> seedlings eq.`],
       ['Total spend', `<b class="mono">${money(c.total)}</b>`],
       ['First purchase', c.firstDate? fmtDate(c.firstDate) : '-'],
       ['Last purchase', c.lastDate? fmtDate(c.lastDate) : '-'],
@@ -3903,7 +4008,7 @@ function clientStatement(id, fmt){
     let fy = doc.lastAutoTable.finalY + 9;
     doc.setFont(undefined,'bold'); doc.setFontSize(11); doc.setTextColor(38,53,42);
     doc.text('Period total', 14, fy);
-    doc.text(money(total)+'  ·  '+qty.toLocaleString()+' seedlings', 196, fy, {align:'right'});
+    doc.text(money(total)+'  ·  '+sales.reduce((a,b)=>a+saleTraysTotal(b),0).toLocaleString()+' trays · '+qty.toLocaleString()+' seedlings eq.', 196, fy, {align:'right'});
     fy += 8;
     doc.setFont(undefined,'normal'); doc.setFontSize(8.6); doc.setTextColor(110);
     doc.text('Thank you for growing with '+orgProfile().name+'.', 14, fy);
@@ -3918,7 +4023,8 @@ function renderCashSalesAnalysis(){
   const sales = DATA.cashSales;
   if(!sales.length){ el.innerHTML = '<div class="card small-muted">No cash sales recorded yet.</div>'; return; }
   const totalRevenue = sales.reduce((a,b)=>a+b.total,0);
-  const totalQty = sales.reduce((a,b)=>a+b.qty,0);
+  const totalTrays = sales.reduce((a,b)=>a+saleTraysTotal(b),0);
+  const totalLoose = sales.reduce((a,b)=>a+saleLooseSeedlings(b),0);
   const byCrop = {};
   sales.forEach(s=>saleItems(s).forEach(it=>{ const c=matchSalesCrop(it.crop)||it.crop; byCrop[c]=(byCrop[c]||0)+(it.seedlings!=null? it.seedlings : it.qty); }));
   const topCrop = Object.entries(byCrop).sort((a,b)=>b[1]-a[1])[0];
@@ -3929,7 +4035,7 @@ function renderCashSalesAnalysis(){
   el.innerHTML = `
     <div class="grid cols-4">
       ${kpi('Total Recorded Revenue', money(totalRevenue), `${sales.length} transaction(s)`, 'sale')}
-      ${kpi('Total Seedlings Sold', totalQty.toLocaleString(), 'across all recorded sales', 'trend')}
+      ${kpi('Total Trays Sold', totalTrays.toLocaleString(), totalLoose? '+ '+totalLoose.toLocaleString()+' loose seedlings' : 'across all recorded sales', 'trend')}
       ${kpi('Top-Selling Crop', topCrop?topCrop[0]:'-', topCrop?topCrop[1].toLocaleString()+' units':'', 'trend')}
       ${kpi('Avg. Transaction Value', money(Math.round(avgTxn)), topPayment?`Most used: ${topPayment[0]}`:'', 'sale')}
     </div>
@@ -4043,7 +4149,7 @@ function updateSalesChart(){
   }
   document.getElementById('sa-summary').innerHTML = `
     <div class="grid cols-3" style="margin-top:16px;">
-      ${kpi('Total Seedlings Sold', totalQty.toLocaleString(), `${salesSelectedCrops.join(', ')||'-'}`, 'trend')}
+      ${kpi('Seedlings Sold (equivalent)', totalQty.toLocaleString(), `${salesSelectedCrops.join(', ')||'-'}`, 'trend')}
       ${kpi('Total Estimated Revenue', money(totalRev), `${from}–${to}`, 'sale')}
       ${kpi('Growth (first → last year)', yoy, 'Based on selected crops & range', 'trend')}
     </div>
@@ -4076,9 +4182,9 @@ function exportSalesPDF(){
 const COMMON_CROPS = ['Tomato','Capsicum','Cucumber','Brassica (Cabbage/Kale)','Onion','Watermelon','Butternut','Eggplant','Other'];
 const STAGES = ['Sown','Germinating','Hardening','Ready for Sale'];
 function computeStage(rec){
-  const sownDate = new Date(rec.dateSown+'T00:00:00');
+  const sownDate = new Date((rec.dateSown||todayISO())+'T00:00:00');
   const now = new Date();
-  const daysElapsed = Math.max(0, Math.round((now-sownDate)/86400000));
+  const daysElapsed = isNaN(sownDate.getTime()) ? 0 : Math.max(0, Math.round((now-sownDate)/86400000));
   const totalDays = rec.readyDays || 30;
   const frac = totalDays>0 ? daysElapsed/totalDays : 1;
   let stage;
@@ -4531,7 +4637,16 @@ function renderSeedlingStock(root){
   <button class="btn secondary" onclick="nav('sowing')">+ Record a new sowing to add stock</button></div>
   <div class="grid cols-3" style="margin-bottom:16px;">
     ${kpi('Ready for Sale (viable est.)', readyTotal.toLocaleString(), `seedlings across ${readyRows.length} batch(es)`, 'stock')}
-    ${kpi('Total Nursery Stock', rows.reduce((a,b)=>a+b.viableQty,0).toLocaleString(), `viable est. across ${rows.length} batches`, 'sow')}
+    ${(()=>{
+      /* trays per crop where a tray size is known (price list or last tray sale) */
+      const total = rows.reduce((a,b)=>a+b.viableQty,0);
+      let trays = 0, converted = 0;
+      rows.filter(x=>x.viableQty>0).forEach(x=>{ const ts = traySizeFor(x.r.crop+' '+x.r.variety); if(ts){ trays += Math.floor(x.viableQty/ts); converted += x.viableQty; } });
+      const rest = total - converted;
+      return trays
+        ? kpi('Total Nursery Stock', '≈ '+trays.toLocaleString()+' trays', total.toLocaleString()+' seedlings'+(rest>0? ' ('+rest.toLocaleString()+' without a tray size)':'')+` · ${rows.length} batches`, 'sow')
+        : kpi('Total Nursery Stock', total.toLocaleString(), `viable est. across ${rows.length} batches`, 'sow');
+    })()}
     ${kpi('Next Batch Ready', (()=>{ const up=rows.filter(x=>x.c.stage<4).sort((a,b)=>a.c.daysLeft-b.c.daysLeft)[0]; return up? up.c.daysLeft+'d' : '-'; })(), (()=>{ const up=rows.filter(x=>x.c.stage<4).sort((a,b)=>a.c.daysLeft-b.c.daysLeft)[0]; return up? up.r.variety+' · '+fmtDate(up.c.readyDate) : 'All batches ready'; })(), 'status')}
   </div>
   ${dataTable('stock', {
@@ -4545,7 +4660,7 @@ function renderSeedlingStock(root){
       {key:'crop', label:'Crop', val:x=>x.r.crop},
       {key:'variety', label:'Variety', val:x=>x.r.variety},
       {key:'bay', label:'Bay', val:x=>x.r.bay},
-      {key:'sown', label:'Sown Qty', align:'right', val:x=>x.r.qty, html:x=>`<span class="mono">${x.r.qty.toLocaleString()}</span>`},
+      {key:'sown', label:'Sown Qty', align:'right', val:x=>+x.r.qty||0, html:x=>`<span class="mono">${(+x.r.qty||0).toLocaleString()}</span>`},
       {key:'viable', label:'Est. Viable Qty', align:'right', val:x=>x.viableQty, html:x=>`<b class="mono">${x.viableQty.toLocaleString()}</b>`},
       {key:'readyDate', label:'Ready Date', val:x=>x.c.readyDate, html:x=>fmtDate(x.c.readyDate)},
       {key:'ready', label:'Countdown', val:x=>x.c.stage===4? -1 : x.c.daysLeft, html:x=>x.c.stage<4? st(x.c.daysLeft<=3?'gold':'slate', x.c.daysLeft+' day(s) left') : st('green','Ready now')},
@@ -4554,8 +4669,8 @@ function renderSeedlingStock(root){
     ],
     rowMenu: x=>[
       {label:'Open batch details', run:()=>openBatchDrawer(x.id)},
-      ...(computeStage(r).stage===4 && batchRemaining(r)>0 ? [{label:'Sell from this batch', run:()=>{ if(CURRENT.access.includes('cashsale')){ nav('cashsale'); openSaleModal(r.id); } else toast('You do not have POS access.','err'); }}] : []),
-      {label: r.closed? 'Reopen batch' : 'Mark sold out / transplanted', run:()=>{ r.closed = !r.closed; logActivity(`${r.closed? 'Closed' : 'Reopened'} seedling batch ${r.batchCode} (${r.crop} ${r.variety}).`); saveData(); renderSeedlingStock(document.getElementById('view-root')); toast(r.closed? 'Batch closed; it no longer counts as stock.' : 'Batch reopened.'); }},
+      ...(x.c.stage===4 && batchRemaining(x.r)>0 ? [{label:'Sell from this batch', run:()=>{ if(CURRENT.access.includes('cashsale')){ nav('cashsale'); openSaleModal(x.r.id); } else toast('You do not have POS access.','err'); }}] : []),
+      {label: x.r.closed? 'Reopen batch' : 'Mark sold out / transplanted', run:()=>{ x.r.closed = !x.r.closed; logActivity(`${x.r.closed? 'Closed' : 'Reopened'} seedling batch ${x.r.batchCode} (${x.r.crop} ${x.r.variety}).`); saveData(); renderSeedlingStock(document.getElementById('view-root')); toast(x.r.closed? 'Batch closed; it no longer counts as stock.' : 'Batch reopened.'); }},
     ],
   })}
   `;
@@ -7077,7 +7192,7 @@ function buildReport(key){
         {heading:'Sales register', head:['Receipt','Date','Customer','KRA PIN','Item (batch)','Qty','Unit Price','Total','VAT Treatment','VAT (KES)','Payment','Served By'], rows},
         {heading:'Revenue by month', head:['Month','Revenue'], rows: monthRows.length? monthRows : [['-','-']]},
       ],
-      summary:[['Receipts', sales.length], ['Seedlings sold', sales.reduce((a,b)=>a+saleSeedlingsTotal(b),0).toLocaleString()], ['Total revenue', money(revenue)], ['VAT in standard-rated sales (16% inclusive)', money(vatTotal)], ['Company KRA PIN', DATA.companyKraPin||'Not set']] };
+      summary:[['Receipts', sales.length], ['Trays sold', sales.reduce((a,b)=>a+saleTraysTotal(b),0).toLocaleString() + (sales.reduce((a,b)=>a+saleLooseSeedlings(b),0)? ' (+ '+sales.reduce((a,b)=>a+saleLooseSeedlings(b),0).toLocaleString()+' loose seedlings)' : '')], ['Seedlings (equivalent)', sales.reduce((a,b)=>a+saleSeedlingsTotal(b),0).toLocaleString()], ['Total revenue', money(revenue)], ['VAT in standard-rated sales (16% inclusive)', money(vatTotal)], ['Company KRA PIN', DATA.companyKraPin||'Not set']] };
   }
   if(key==='stock'){
     const cons = DATA.consumables.map(c=>[c.name, c.qty+' '+c.unit, money(c.unitCost), money(c.qty*c.unitCost), c.qty<=c.reorder?'Reorder':'Healthy']);

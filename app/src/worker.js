@@ -393,6 +393,9 @@ async function handleApi(req, env, url) {
         if (dup) return json({ error: 'An account with this name already exists. Sign in instead, or ask your administrator.' }, 409);
         let active = false;
         const inviteToken = String(body.invite || '');
+        /* open self-registration is disabled: accounts come from the Super User
+           (Users & Access) or an invitation link sent by an administrator */
+        if (!inviteToken) return json({ error: 'Self-registration is disabled. Ask your administrator for an invitation or an account.' }, 403);
         if (inviteToken) {
           const inv = await env.SPN_DB.prepare('SELECT token, role, expires_at, used_by FROM invites WHERE token = ?').bind(inviteToken).first();
           if (!inv || inv.used_by || inv.expires_at < Date.now()) {
@@ -925,6 +928,28 @@ async function handleApi(req, env, url) {
          hashes) and every collection. Email sends it as a JSON attachment via the
          Email Sending binding; restore upserts users (passwords are preserved
          because the hash columns are untouched) and replaces the collections. */
+      /* customer e-receipt: the POS renders the PDF, the Worker emails it */
+      if (route === 'email-receipt' && req.method === 'POST') {
+        if (!emailConfigured(env)) return json({ error: 'Email sending is not configured on this deployment (set EMAIL_FROM in wrangler.jsonc).' }, 503);
+        const body = await req.json().catch(() => ({}));
+        const to = String(body.to || '').trim();
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) return json({ error: 'A valid customer email address is required' }, 400);
+        const pdf = String(body.pdfBase64 || '');
+        if (!pdf || pdf.length > 2000000) return json({ error: 'Receipt PDF missing or too large' }, 413);
+        const receiptNo = String(body.receiptNo || 'receipt').replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 40);
+        const fname = String(body.fileName || ('SPN_Receipt_' + receiptNo + '.pdf')).replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 80);
+        try {
+          await env.SPN_EMAIL.send({
+            to: [{ email: to }],
+            from: { email: env.EMAIL_FROM, name: env.EMAIL_FROM_NAME || 'SPN ERP' },
+            subject: 'Your receipt ' + receiptNo + ' - Savannah Propagation Nursery',
+            text: String(body.text || 'Your receipt is attached as a PDF.').slice(0, 4000),
+            attachments: [{ filename: fname, type: 'application/pdf', disposition: 'attachment', content: pdf }],
+          });
+        } catch (e) { return json({ error: 'Could not send the email: ' + String((e && e.message) || e) }, 502); }
+        return json({ ok: true });
+      }
+
       if (route === 'backup' && req.method === 'GET') {
         if (session.user.role !== 'SuperUser') return json({ error: 'Super User required' }, 403);
         return json(await buildBackupDump(env));
