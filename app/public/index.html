@@ -2651,7 +2651,7 @@ function renderDashboard(root){
 
     <div class="card b7">
       <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px;">
-        <div class="card-title" style="margin:0;">Sales Performance · last 12 months</div>
+        <div class="card-title" style="margin:0;">Sales Performance · trays per month, last 12 months</div>
         ${CURRENT.access.includes('salesanalytics')? `<button class="btn sm ghost" onclick="nav('salesanalytics')">View sales analytics →</button>` : ''}
       </div>
       <canvas id="dash-sales-canvas" height="105" style="margin-top:10px;"></canvas>
@@ -3020,7 +3020,10 @@ function renderDashboardSalesChart(){
   const merged = [...DATA.salesHistory.filter(r=>!realKeys.has(`${r.crop}|${r.year}|${r.month}`)), ...real];
   const datasets = SALES_CROPS.map(crop=>{
     const byKey={};
-    merged.filter(r=>r.crop===crop).forEach(r=>{ byKey[`${r.year}-${String(r.month).padStart(2,'0')}`]=r.qty; });
+    /* the chart is in trays: real months carry actual tray counts; modelled history
+       rows (seedlings) convert with the crop's tray size (price list, else default) */
+    const ts = traySizeFor(crop) || DEFAULT_TRAY_SIZE;
+    merged.filter(r=>r.crop===crop).forEach(r=>{ byKey[`${r.year}-${String(r.month).padStart(2,'0')}`] = r.trays!=null ? r.trays : Math.round((+r.qty||0)/ts); });
     return { label:crop, data: keys.map(k=>byKey[k]||0), borderColor:CROP_COLORS[crop], backgroundColor:'transparent', tension:.35, pointRadius:0, borderWidth:2.2 };
   });
   if(dashSalesChart) dashSalesChart.destroy();
@@ -3028,7 +3031,7 @@ function renderDashboardSalesChart(){
     type:'line', data:{labels, datasets},
     options:{ responsive:true, interaction:{mode:'index',intersect:false},
       plugins:{ legend:{position:'bottom', labels:{boxWidth:10, boxHeight:10, font:{size:10.5}}} },
-      scales:{ x:{ grid:{display:false}, ticks:{font:{size:10}} }, y:{ border:{display:false}, grid:{color:'#EEF1EA'}, ticks:{font:{size:10}} } } }
+      scales:{ x:{ grid:{display:false}, ticks:{font:{size:10}} }, y:{ border:{display:false}, grid:{color:'#EEF1EA'}, ticks:{font:{size:10}}, title:{display:true, text:'trays / month', font:{size:9.5}, color:'#8A937F'} } } }
   });
 }
 function editLeadsTarget(){
@@ -3370,6 +3373,7 @@ function itemQtyLabel(it){
 }
 function saleSummary(s){ const its = saleItems(s); return its.length===1? its[0].crop : `${its[0].crop} + ${its.length-1} more`; }
 function saleQtyTotal(s){ return saleItems(s).reduce((a,it)=>a+(+it.qty||0),0); }
+const DEFAULT_TRAY_SIZE = 66; /* standard SPN propagation tray; per-crop sizes in the price list override it */
 function saleTraysTotal(s){ return saleItems(s).reduce((a,it)=> a + (it.unit==='trays'? (+it.qty||0) : 0), 0); }
 /* seedlings-per-tray for a crop: the POS price list first, then the most recent
    tray sale of that crop; null when the workspace has never defined one */
@@ -4140,8 +4144,10 @@ function realSalesByMonth(){
       const crop = matchSalesCrop(it.crop);
       if(!crop) return;
       const key = `${crop}|${d.getFullYear()}|${d.getMonth()+1}`;
-      if(!map[key]) map[key] = {crop, year:d.getFullYear(), month:d.getMonth()+1, qty:0, revenue:0};
+      if(!map[key]) map[key] = {crop, year:d.getFullYear(), month:d.getMonth()+1, qty:0, trays:0, revenue:0};
       map[key].qty += (it.seedlings!=null? it.seedlings : it.qty);
+      /* actual tray lines count 1:1; seedling lines convert with the crop's tray size */
+      map[key].trays += it.unit==='trays' ? (+it.qty||0) : Math.round((it.seedlings!=null? it.seedlings : +it.qty||0) / (traySizeFor(it.crop) || DEFAULT_TRAY_SIZE));
       map[key].revenue += it.total;
     });
   });
