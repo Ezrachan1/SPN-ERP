@@ -58,6 +58,17 @@ for (const m of scriptTags) {
   else console.warn('  keeping CDN reference for ' + url + ' (needs network at runtime)');
 }
 
+/* 1b) vendor other CDN stylesheets (e.g. Leaflet) */
+const cssLinks = [...html.matchAll(/<link rel="stylesheet" href="(https?:\/\/[^"]+\.css)">/g)];
+for (const m of cssLinks) {
+  const url = m[1];
+  const name = url.split('/').filter(Boolean).slice(-2).join('-').replace(/[^A-Za-z0-9._-]+/g, '_');
+  const dest = path.join(www, 'vendor', name);
+  const ok = await download(url, dest);
+  if (ok) { html = html.replace(m[0], `<link rel="stylesheet" href="vendor/${name}">`); console.log('  vendored ' + name); }
+  else console.warn('  keeping CDN reference for ' + url);
+}
+
 /* 2) vendor the Google Fonts (CSS + woff2) */
 const fontLink = html.match(/<link href="(https:\/\/fonts\.googleapis\.com\/css2\?[^"]+)"[^>]*>/);
 if (fontLink) {
