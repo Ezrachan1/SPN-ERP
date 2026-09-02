@@ -3015,16 +3015,25 @@ function renderDashboardSalesChart(){
     keys.push(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`);
     labels.push(d.toLocaleDateString('en-KE',{month:'short'}));
   }
-  const real = realSalesByMonth();
-  const realKeys = new Set(real.map(r=>`${r.crop}|${r.year}|${r.month}`));
-  const merged = [...DATA.salesHistory.filter(r=>!realKeys.has(`${r.crop}|${r.year}|${r.month}`)), ...real];
-  const datasets = SALES_CROPS.map(crop=>{
+  const real = realSalesByMonthDetailed();
+  const realMonths = new Set(real.map(r=>`${r.year}|${r.month}`));
+  /* modelled history fills only months with no real sales at all */
+  const merged = [...DATA.salesHistory.filter(r=>!realMonths.has(`${r.year}|${r.month}`)), ...real];
+  const inWindow = merged.filter(r=>keys.includes(`${r.year}-${String(r.month).padStart(2,'0')}`));
+  /* the crop lines follow the data: top crops actually sold in the window get their
+     own line, everything else becomes "Other"; the chart is in trays */
+  const trayValue = r => r.trays!=null ? r.trays : Math.round((+r.qty||0)/(traySizeFor(r.crop)||DEFAULT_TRAY_SIZE));
+  const totals = {};
+  inWindow.forEach(r=>{ if(r.crop!=='Other') totals[r.crop] = (totals[r.crop]||0) + trayValue(r); });
+  const topCrops = Object.entries(totals).sort((a,b)=>b[1]-a[1]).slice(0,5).map(([c])=>c);
+  const hasOther = inWindow.some(r=>r.crop==='Other' || !topCrops.includes(r.crop));
+  const cropList = [...topCrops, ...(hasOther? ['Other'] : [])];
+  const datasets = cropList.map((crop,i)=>{
     const byKey={};
-    /* the chart is in trays: real months carry actual tray counts; modelled history
-       rows (seedlings) convert with the crop's tray size (price list, else default) */
-    const ts = traySizeFor(crop) || DEFAULT_TRAY_SIZE;
-    merged.filter(r=>r.crop===crop).forEach(r=>{ byKey[`${r.year}-${String(r.month).padStart(2,'0')}`] = r.trays!=null ? r.trays : Math.round((+r.qty||0)/ts); });
-    return { label:crop, data: keys.map(k=>byKey[k]||0), borderColor:CROP_COLORS[crop], backgroundColor:'transparent', tension:.35, pointRadius:0, borderWidth:2.2 };
+    inWindow.filter(r=> crop==='Other' ? (r.crop==='Other' || !topCrops.includes(r.crop)) : r.crop===crop)
+      .forEach(r=>{ const k=`${r.year}-${String(r.month).padStart(2,'0')}`; byKey[k]=(byKey[k]||0)+trayValue(r); });
+    const color = CROP_COLORS[crop] || EXTRA_CROP_COLORS[i % EXTRA_CROP_COLORS.length];
+    return { label:crop, data: keys.map(k=>byKey[k]||0), borderColor:color, backgroundColor:'transparent', tension:.35, pointRadius:0, borderWidth:2.2 };
   });
   if(dashSalesChart) dashSalesChart.destroy();
   dashSalesChart = new Chart(canvas.getContext('2d'), {
@@ -4135,6 +4144,44 @@ function toggleSalesCrop(crop, checked){
 function matchSalesCrop(line){
   /* sales of crops outside the four tracked lines are charted as "Other" instead of vanishing */
   return SALES_CROPS.find(c => c!=='Other' && (line||'').toLowerCase().includes(c.toLowerCase())) || 'Other';
+}
+/* canonical crop name for a free-text sale line ("Tomato Zara F1 · TST-1" -> "Tomato"),
+   recognised from the common-crop list, sowing records and seed lots */
+function canonicalCrop(line){
+  const t = String(line||'').toLowerCase();
+  /* price-list names like "Pawpaw seedlings (tray of 66)" contribute their base
+     crop word(s), so anything sold through the POS gets its own line */
+  const plBases = (DATA.priceList||[]).map(p=>String(p.name||'')
+    .replace(/\([^)]*\)/g,' ').replace(/\b(seedlings?|trays?|tray)\b/gi,' ')
+    .replace(/[^A-Za-z0-9 ]+/g,' ').replace(/\s+/g,' ').trim())
+    .filter(b=>b.length>2)
+    .map(b=>b.replace(/\b\w/g, ch=>ch.toUpperCase()));
+  const known = [...new Set([
+    ...COMMON_CROPS.filter(c=>c!=='Other').map(c=>c.split(' (')[0]),
+    ...DATA.sowingRecords.map(r=>r.crop),
+    ...(DATA.seedInventory||[]).map(l=>l.crop),
+    ...(DATA.farmPlots||[]).map(p=>p.crop),
+    ...plBases,
+  ].filter(Boolean))];
+  const hit = known.filter(k=>t.includes(String(k).toLowerCase())).sort((a,b)=>b.length-a.length)[0];
+  return hit || 'Other';
+}
+const EXTRA_CROP_COLORS = ['#3E6FA8','#7A5D22','#5A4B7E','#C8842A','#4C8C57','#8C5518'];
+/* per-month trays/seedlings by canonical crop (dashboard chart: lines follow the data) */
+function realSalesByMonthDetailed(){
+  const map = {};
+  DATA.cashSales.forEach(s=>{
+    const d = new Date(s.date+'T00:00:00');
+    saleItems(s).forEach(it=>{
+      const crop = canonicalCrop(it.crop);
+      const key = `${crop}|${d.getFullYear()}|${d.getMonth()+1}`;
+      if(!map[key]) map[key] = {crop, year:d.getFullYear(), month:d.getMonth()+1, qty:0, trays:0, revenue:0};
+      map[key].qty += (it.seedlings!=null? it.seedlings : it.qty);
+      map[key].trays += it.unit==='trays' ? (+it.qty||0) : Math.round((it.seedlings!=null? it.seedlings : +it.qty||0) / (traySizeFor(it.crop) || DEFAULT_TRAY_SIZE));
+      map[key].revenue += it.total;
+    });
+  });
+  return Object.values(map);
 }
 function realSalesByMonth(){
   const map = {};
