@@ -1037,6 +1037,10 @@ function generateSalesHistory(){
   }
   return rows;
 }
+/* per seedling on purpose: priceHistory is a synced collection whose deployed rows are
+   already per seedling, so renderPriceTrendChart converts to per tray at render time.
+   Changing the unit here would leave existing workspaces reading 66x low with no way
+   to tell the two kinds of row apart. */
 function generatePriceHistory(){
   const crops = ['Tomato','Capsicum','Cucumber','Brassica'];
   const basePrice = {Tomato:1.5, Capsicum:2.0, Cucumber:1.2, Brassica:0.8}; // illustrative KES/seedling in year 2000
@@ -1059,7 +1063,7 @@ const REPORT_DEFS = [
   {key:'compliance', name:'Seed Compliance Register', desc:'Seed lot, source, certificate number and class per batch - Seeds & Plant Varieties Act traceability record.', access:['Admin','HOD']},
   {key:'seeds', name:'Seeds Inventory Report', desc:'Seed lots on hand: crop, variety, supplier, lot and KEPHIS numbers, germination, received and expiry dates, quantity drawn by sowing vs remaining, lots needing attention.', access:['Admin','HOD','Procurement']},
   {key:'sales', name:'Cash Sales & VAT Summary', desc:'Daily/monthly sales register with VAT treatment notes, formatted for KRA filing support.', access:['Admin','HR']},
-  {key:'stock', name:'Stock Valuation Report', desc:'Consumables and seedling stock on hand, valued at cost - for period-end reconciliation.', access:['Admin','Procurement']},
+  {key:'stock', name:'Stock Valuation Report', desc:'Consumables and nursery stock on hand in trays and seedlings, valued at cost - for period-end reconciliation.', access:['Admin','Procurement']},
   {key:'procurement', name:'Procurement Report', desc:'Purchase requests and orders: item, quantity, supplier, estimated cost, status, requested and delivered dates, with open and delivered totals.', access:['Admin','Procurement','Finance']},
   {key:'hr', name:'HR & Payroll Support Report', desc:'Staff headcount, permanent vs casual split, attendance-linked requisitions.', access:['Admin','HR']},
   {key:'quality', name:'GLOBALG.A.P. Readiness Checklist', desc:'Self-assessment against GLOBALG.A.P. crop-base module clauses for propagation material.', access:['Admin','HOD']},
@@ -2029,7 +2033,7 @@ const VIEW_TITLES = {
   sowing:['Sowing Data Entry','Statutory sowing record - Seeds & Plant Varieties Act'],
   seedinventory:['Seeds Inventory','Seed lots on hand, drawn down by sowing, with expiry and germination'],
   sownstatus:['Sown Seed Status','Track batches from sowing to transplant-ready'],
-  seedlingstock:['Seedling Stock','Greenhouse inventory of ready seedlings'],
+  seedlingstock:['Seedling Stock','Greenhouse inventory in trays, every batch sown'],
   livestock:['Livestock','Herd inventory, feed guidance and weight estimation'],
   procurement:['Procurement','Purchase requests, orders and goods received'],
   consumables:['Consumables Stock','Inputs and consumables stock balance'],
@@ -2483,7 +2487,9 @@ function alertItems(){
   if(can('seedinventory')) seedAttention().slice(0,6).forEach(({l,s})=>push({sev: s.key==='expired'?'rust':'gold', icon:ICONS.seed, view:'seedinventory', title:('Seed lot '+s.label.toLowerCase()+': '+l.crop+' '+(l.variety||'')).trim(), sub:(l.lotNo? 'Lot '+l.lotNo+' · ':'')+fmtLotQty(l)+(l.expiryDate? ' · expiry '+fmtDate(l.expiryDate):''), run:()=>{ nav('seedinventory'); openSeedLotDrawer(l.id); }}));
   /* nursery */
   if(can('seedlingstock')||can('sownstatus')||can('sowing')){
-    const ready = DATA.sowingRecords.filter(r=>computeStage(r).stage===4);
+    /* readyBatches() also drops closed and fully sold batches, matching what the POS
+       will actually let you sell from */
+    const ready = readyBatches();
     if(ready.length) push({sev:'blue', icon:ICONS.stock, view: can('seedlingstock')?'seedlingstock':(can('sownstatus')?'sownstatus':'sowing'), title:ready.length+' batch'+(ready.length===1?'':'es')+' ready for sale', sub: ready.slice(0,3).map(r=>r.batchCode).join(', ')+(ready.length>3?' and more':'')});
   }
   if(can('farm')){
@@ -2570,11 +2576,13 @@ function renderDashboard(root){
   const targetPct = Math.min(100, Math.round((leadsThisMonth/target)*100));
   const canEditTarget = CURRENT.role==='Admin'||CURRENT.role==='Marketing'||isSuper();
   const stageAgg = [1,2,3,4].map(n=>{
-    const inStage = stockRows.filter(x=>x.c.stage===n);
-    return { qty: inStage.reduce((a,b)=>a+b.viableQty,0), batches: inStage.length };
+    /* a batch with nothing left is not stock in that stage, and must not light the tile */
+    const inStage = stockRows.filter(x=>x.c.stage===n && x.viableQty>0);
+    return { qty: inStage.reduce((a,b)=>a+b.viableQty,0), trays: stockTrays(inStage), batches: inStage.length };
   });
   const stageIcons = ['stageSeed','stageSprout','stageGrow','stageReady'];
-  const readiness = stockRows.slice().sort((a,b)=>b.c.pct-a.c.pct);
+  /* batches that are closed or fully sold have nothing to show as ready stock */
+  const readiness = stockRows.filter(x=>x.viableQty>0).sort((a,b)=>b.c.pct-a.c.pct);
   const alerts = alertItems();
   const firstName = CURRENT.name.split(' ')[0];
 
@@ -2588,23 +2596,25 @@ function renderDashboard(root){
   </div>
   <div class="bento">
     ${(()=>{
-      /* per-batch tray conversion, each crop with its own tray size (price list or
-         last tray sale); batches without a known tray size stay as seedlings */
-      let trays = 0, converted = 0;
-      stockRows.filter(x=>x.c.stage===4 && x.viableQty>0).forEach(x=>{ const ts = traySizeFor(x.r.crop+' '+x.r.variety); if(ts){ trays += Math.floor(x.viableQty/ts); converted += x.viableQty; } });
-      const rest = readySeedlings - converted;
+      /* "ready" is stage 4 only; stock still hardening or younger is reported beside it,
+         never inside it */
+      const readyRows = stockRows.filter(x=>x.c.stage===4 && x.viableQty>0);
+      const growingRows = stockRows.filter(x=>x.c.stage<4 && x.viableQty>0);
+      const readyTrays = stockTrays(readyRows), growingTrays = stockTrays(growingRows);
+      const growingSeedlings = totalSeedlings - readySeedlings;
       return `<div class="card kpi b3">
       <div class="kpi-row"><div class="kpi-icon">${ICONS.stock}</div>${st('green','Ready')}</div>
-      <div class="k-label">${trays? 'Trays Ready for Sale' : 'Total Seedlings Ready'}</div>
-      <div class="k-value">${trays? '≈ '+trays.toLocaleString() : readySeedlings.toLocaleString()}</div>
-      <div class="k-sub">${trays? readySeedlings.toLocaleString()+' seedlings'+(rest>0? ' ('+rest.toLocaleString()+' without a tray size)':'')+' · ' : ''}of ${totalSeedlings.toLocaleString()} viable est. in nursery</div>
+      <div class="k-label">Trays Ready for Sale</div>
+      <div class="k-value">${readyTrays? '≈ '+readyTrays.toLocaleString() : (readySeedlings? '< 1' : '0')}</div>
+      <div class="k-sub">${readyRows.length} batch${readyRows.length===1?'':'es'} at Ready for Sale · ${readySeedlings.toLocaleString()} seedlings${growingSeedlings>0? ' · '+(growingTrays? growingTrays.toLocaleString()+' tray'+(growingTrays===1?'':'s') : '< 1 tray')+' still growing, not counted here' : ''}</div>
     </div>`;
     })()}
     <div class="card kpi b3">
       <div class="kpi-row"><div class="kpi-icon">${ICONS.sale}</div>${salesDelta!=null? `<span class="k-delta ${salesDelta>=0?'up':'down'}">${salesDelta>=0?'↑':'↓'} ${Math.abs(salesDelta)}%</span>`:''}</div>
       <div class="k-label">Today's Sales</div>
       <div class="k-value">${money(todaySales)}</div>
-      <div class="k-sub">${salesDelta!=null? 'vs yesterday · ':''}${DATA.cashSales.filter(s=>s.date===todayISO()).reduce((a,s)=>a+saleTraysTotal(s),0).toLocaleString()} trays today · ${DATA.cashSales.length} receipts total</div>
+      ${(()=>{ const todays = DATA.cashSales.filter(s=>s.date===todayISO()); const t = salesTrays(todays); const sd = todays.reduce((a,s)=>a+saleSeedlingsTotal(s),0);
+        return `<div class="k-sub">${salesDelta!=null? 'vs yesterday · ':''}${t? t.toLocaleString()+' tray'+(t===1?'':'s') : (sd? '< 1 tray' : '0 trays')} today · ${DATA.cashSales.length} receipts total</div>`; })()}
     </div>
     <div class="card kpi b3">
       <div class="kpi-row"><div class="kpi-icon">${ICONS.leads}</div>${canEditTarget?`<button class="btn sm ghost" onclick="editLeadsTarget()" title="Set monthly target" style="padding:3px 8px;">Edit</button>`:''}</div>
@@ -2623,18 +2633,19 @@ function renderDashboard(root){
     <div class="card b8">
       <div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap;">
         <div class="card-title" style="margin:0;">Growth Pipeline</div>
-        <span class="small-muted">Live from Sowing Data Entry · click a stage to open its batches</span>
+        <span class="small-muted">Live from Sowing Data Entry · trays per stage · click a stage to open its batches</span>
       </div>
-      <div class="pipeline" style="margin-top:14px;">
+      <div class="small-muted" style="margin-top:8px;">${trayBasisNote()}</div>
+      <div class="pipeline" style="margin-top:10px;">
         ${STAGES.map((name,i)=>{
           const n=i+1, agg=stageAgg[i];
           const cls = agg.batches>0 ? 'now' : (stageAgg.slice(i+1).some(a=>a.batches>0)?'done':'');
-          return `<div class="pipe-stage ${cls}" onclick="openPipelineStage(${n})" title="View ${name} batches">
+          return `<div class="pipe-stage ${cls}" onclick="openPipelineStage(${n})" title="${agg.qty.toLocaleString()} viable seedlings · view ${name} batches">
             <div class="ps-bar"></div>
             <div class="ps-dot">${ICONS[stageIcons[i]]}</div>
             <div class="ps-name">${name}</div>
-            <div class="ps-count">${agg.qty.toLocaleString()}</div>
-            <div class="ps-sub">${agg.batches} batch${agg.batches===1?'':'es'}</div>
+            <div class="ps-count">${agg.trays? '≈ '+agg.trays.toLocaleString()+' tray'+(agg.trays===1?'':'s') : (agg.qty? '< 1 tray' : '0 trays')}</div>
+            <div class="ps-sub">${agg.qty.toLocaleString()} seedlings · ${agg.batches} batch${agg.batches===1?'':'es'}</div>
           </div>`;
         }).join('')}
       </div>
@@ -2661,11 +2672,11 @@ function renderDashboard(root){
       ${readiness.length? readiness.map(({r,c,viableQty})=>`
         <div class="readiness-row">
           <span class="rr-dot" style="background:${CROP_COLORS[r.crop]||'var(--sage)'};"></span>
-          <div class="rr-name">${esc(r.variety)}<span>${esc(r.crop)} · ${traysOfLabel(r.crop+' '+r.variety, viableQty)}</span></div>
+          <div class="rr-name">${esc(r.variety)}<span>${esc(r.crop)} · ${traysOfLabel(r.crop, viableQty)} · ${STAGES[c.stage-1]}</span></div>
           <div class="progress-line" style="flex:1;"><i style="width:${c.pct}%;background:${CROP_COLORS[r.crop]||'var(--sage)'};"></i></div>
           <span class="rr-pct">${c.pct}%</span>
         </div>`).join('') : '<div class="small-muted">No sowing records yet.</div>'}
-      <div class="small-muted" style="margin-top:8px;">Growth progress toward transplant-ready, by batch. Tray counts use the tray size from the POS price list (or the crop's last tray sale); crops without one show seedlings. Germination rates are in Nursery Health on the batch detail.</div>
+      <div class="small-muted" style="margin-top:8px;">Every batch by growth progress, so this list includes stock still hardening, not only what is ready to sell. ${trayBasisNote()} Germination rates are in Nursery Health on the batch detail.</div>
     </div>
 
     <div class="card b6">
@@ -3015,25 +3026,19 @@ function renderDashboardSalesChart(){
     keys.push(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`);
     labels.push(d.toLocaleDateString('en-KE',{month:'short'}));
   }
-  const real = realSalesByMonthDetailed();
-  const realMonths = new Set(real.map(r=>`${r.year}|${r.month}`));
-  /* modelled history fills only months with no real sales at all */
-  const merged = [...DATA.salesHistory.filter(r=>!realMonths.has(`${r.year}|${r.month}`)), ...real];
-  const inWindow = merged.filter(r=>keys.includes(`${r.year}-${String(r.month).padStart(2,'0')}`));
+  const inWindow = mergedSalesRows().filter(r=>keys.includes(`${r.year}-${String(r.month).padStart(2,'0')}`));
   /* the crop lines follow the data: top crops actually sold in the window get their
      own line, everything else becomes "Other"; the chart is in trays */
-  const trayValue = r => r.trays!=null ? r.trays : Math.round((+r.qty||0)/(traySizeFor(r.crop)||DEFAULT_TRAY_SIZE));
   const totals = {};
-  inWindow.forEach(r=>{ if(r.crop!=='Other') totals[r.crop] = (totals[r.crop]||0) + trayValue(r); });
+  inWindow.forEach(r=>{ if(r.crop!=='Other') totals[r.crop] = (totals[r.crop]||0) + salesTrayValue(r); });
   const topCrops = Object.entries(totals).sort((a,b)=>b[1]-a[1]).slice(0,5).map(([c])=>c);
   const hasOther = inWindow.some(r=>r.crop==='Other' || !topCrops.includes(r.crop));
   const cropList = [...topCrops, ...(hasOther? ['Other'] : [])];
   const datasets = cropList.map((crop,i)=>{
     const byKey={};
     inWindow.filter(r=> crop==='Other' ? (r.crop==='Other' || !topCrops.includes(r.crop)) : r.crop===crop)
-      .forEach(r=>{ const k=`${r.year}-${String(r.month).padStart(2,'0')}`; byKey[k]=(byKey[k]||0)+trayValue(r); });
-    const color = CROP_COLORS[crop] || EXTRA_CROP_COLORS[i % EXTRA_CROP_COLORS.length];
-    return { label:crop, data: keys.map(k=>byKey[k]||0), borderColor:color, backgroundColor:'transparent', tension:.35, pointRadius:0, borderWidth:2.2 };
+      .forEach(r=>{ const k=`${r.year}-${String(r.month).padStart(2,'0')}`; byKey[k]=(byKey[k]||0)+salesTrayValue(r); });
+    return { label:crop, data: keys.map(k=>byKey[k]||0), borderColor:cropColor(crop,i), backgroundColor:'transparent', tension:.35, pointRadius:0, borderWidth:2.2 };
   });
   if(dashSalesChart) dashSalesChart.destroy();
   dashSalesChart = new Chart(canvas.getContext('2d'), {
@@ -3083,7 +3088,11 @@ function renderCashSale(root){
       {key:'customer', label:'Customer', val:r=>r.customer+' '+(r.phone||''), html:r=>`<div class="cell-main">${esc(r.customer)}</div><div class="cell-sub">${esc(r.phone)}</div>`},
       {key:'kraPin', label:'KRA PIN', val:r=>r.kraPin||'', html:r=>r.kraPin?`<span class="mono">${esc(r.kraPin)}</span>`:'<span class="small-muted">-</span>'},
       {key:'crop', label:'Items', val:r=>r.crop, html:r=>{ const its=saleItems(r); return `<div class="cell-main">${esc(its[0].crop)}</div>${its.length>1? `<div class="cell-sub">+ ${its.length-1} more item${its.length===2?'':'s'}</div>`:''}`; }},
-      {key:'qty', label:'Qty', align:'right', val:r=>saleQtyTotal(r), html:r=>{ const its=saleItems(r); return `<span class="mono">${its.length===1? esc(itemQtyLabel(its[0])) : saleQtyTotal(r).toLocaleString()}</span>`; }},
+      /* sorted on tray equivalent: a raw qty sum across mixed units is not a quantity */
+      {key:'qty', label:'Qty', align:'right', val:r=>saleTrayEqTotal(r), html:r=>{ const its=saleItems(r), t=saleTrayEqTotal(r), sd=saleSeedlingsTotal(r);
+        /* produce sold by kg, pcs or bags has no tray equivalent, so it says nothing */
+        const sub = sd? `≈ ${t? t.toLocaleString()+' tray'+(t===1?'':'s') : '< 1 tray'}` : '';
+        return `<span class="mono">${its.length===1? esc(itemQtyLabel(its[0])) : its.length+' lines'}</span>${sub? `<div class="cell-sub">${sub}</div>` : ''}`; }},
       {key:'total', label:'Total', align:'right', val:r=>r.total, html:r=>`<b class="mono">${money(r.total)}</b>`},
       {key:'vat', label:'VAT', val:r=>r.vat, html:r=>st('green', r.vat.split(' ')[0])},
       {key:'payment', label:'Payment', val:r=>r.payment},
@@ -3268,7 +3277,7 @@ function offerReceiptShare(id){
 }
 function exportCashSalesExcel(){
   if(typeof XLSX==='undefined'){ toast('Excel library unavailable - check your connection.','err'); return; }
-  const rows = scopedSales().flatMap(s=>saleItems(s).map(it=>({Receipt:s.receiptNo, Date:s.date, Customer:s.customer, Phone:s.phone, 'Customer KRA PIN':s.kraPin||'-', Item:it.crop, Qty:it.qty, Unit:it.unit||'seedlings', 'Unit Price':it.unitPrice, 'Line Total (KES)':it.total, 'Receipt Total (KES)':s.total, VAT:s.vat, 'VAT (KES)':s.vatAmount||0, Payment:s.payment, 'Served By':s.servedBy, Location:s.location||''})));
+  const rows = scopedSales().flatMap(s=>saleItems(s).map(it=>({Receipt:s.receiptNo, Date:s.date, Customer:s.customer, Phone:s.phone, 'Customer KRA PIN':s.kraPin||'-', Item:it.crop, Qty:it.qty, Unit:it.unit||'seedlings', 'Trays (eq., per line)': it.unit==='trays'? (+it.qty||0) : (itemSeedlings(it)? trayEqOf(it.crop, itemSeedlings(it)) : ''), 'Unit Price':it.unitPrice, 'Line Total (KES)':it.total, 'Receipt Total (KES)':s.total, VAT:s.vat, 'VAT (KES)':s.vatAmount||0, Payment:s.payment, 'Served By':s.servedBy, Location:s.location||''})));
   if(!rows.length){ toast('No sales to export yet.','err'); return; }
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, excelSheet('Cash Sales Register', rows), 'Cash Sales');
@@ -3281,7 +3290,7 @@ function exportCashSalesPDF(){
   if(!sales.length){ toast('No sales to export yet.','err'); return; }
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({orientation:'landscape'});
-  const y0 = pdfLetterhead(doc, 'Cash Sales Register', 'Generated '+new Date().toLocaleString('en-KE')+' by '+CURRENT.name);
+  const y0 = pdfLetterhead(doc, 'Cash Sales Register', 'Generated '+new Date().toLocaleString('en-KE')+' by '+CURRENT.name+'. Quantities are as billed. '+trayBasisNote());
   doc.autoTable({ startY:y0, head:[['Receipt','Date','Customer','KRA PIN','Item','Qty','Unit price','Line total','Receipt total','VAT','Payment','Served By']],
     body: sales.flatMap(s=>saleItems(s).map((it,ix)=>[ix===0? s.receiptNo : '', ix===0? fmtDate(s.date) : '', ix===0? s.customer : '', ix===0? (s.kraPin||'-') : '', it.crop, itemQtyLabel(it), money(it.unitPrice), money(it.total), ix===0? money(s.total) : '', ix===0? s.vat : '', ix===0? s.payment : '', ix===0? s.servedBy : ''])),
     styles:{fontSize:7.5}, headStyles:{fillColor:[49,92,58]} });
@@ -3296,15 +3305,6 @@ function soldFromBatch(r){ return DATA.cashSales.reduce((a,s)=>a + saleItems(s).
 function batchRemaining(r){ if(r.closed) return 0; return Math.max(0, batchViable(r) - soldFromBatch(r)); }
 function readyBatches(){ return DATA.sowingRecords.filter(r=>computeStage(r).stage===4 && batchRemaining(r)>0); }
 function nextReceiptNo(){ const nums = DATA.cashSales.map(s=>parseInt(String(s.receiptNo||'').replace(/\D/g,''),10)).filter(n=>!isNaN(n)); return 'SPN-R-'+((nums.length? Math.max(...nums) : 1041)+1); }
-function onSaleBatchChange(id){
-  const r = id ? DATA.sowingRecords.find(x=>x.id===id) : null;
-  const crop = document.getElementById('f-crop'), qty = document.getElementById('f-qty'), hint = document.getElementById('f-batch-hint');
-  if(!r){ if(qty) qty.removeAttribute('max'); if(hint) hint.textContent='Not from a nursery batch: type the crop/variety sold.'; return; }
-  const left = batchRemaining(r);
-  if(crop) crop.value = r.crop+' '+r.variety;
-  if(qty){ qty.max = left; if(+qty.value>left) qty.value = left; }
-  if(hint) hint.textContent = `${left.toLocaleString()} seedlings left in ${r.batchCode} (${r.bay||'nursery'})`;
-}
 /* ---------------- price list ----------------
    Managed product/commodity prices. Picking a product on a sale line fills its
    unit and price, so nobody types prices for the same products every day.
@@ -3373,7 +3373,13 @@ function savePriceList(){
    single-item sales keep working through saleItems(). */
 function saleItems(s){
   if(Array.isArray(s.items) && s.items.length) return s.items;
-  return [{crop:s.crop, qty:+s.qty||0, unit:s.unit||'seedlings', traySize:null, seedlings:+s.qty||0, unitPrice:+s.unitPrice||0, total:+s.total||0, batchId:s.batchId||null, batchCode:s.batchCode||null}];
+  /* single-line records from before multi-item sales: a legacy tray line holds a tray
+     count in qty, so its seedling equivalent has to be derived, not copied */
+  const unit = s.unit||'seedlings';
+  const traySize = +s.traySize>0 ? +s.traySize : (unit==='trays' ? (traySizeFromPriceList(s.crop) || DEFAULT_TRAY_SIZE) : null);
+  const qty = +s.qty||0;
+  const seedlings = unit==='trays' ? qty*(traySize||0) : (unit==='seedlings' ? qty : 0);
+  return [{crop:s.crop, qty, unit, traySize, seedlings, unitPrice:+s.unitPrice||0, total:+s.total||0, batchId:s.batchId||null, batchCode:s.batchCode||null}];
 }
 function itemSeedlings(it){ return it.seedlings!=null? +it.seedlings||0 : (it.unit==='trays'? (+it.qty||0)*(+it.traySize||0) : (it.unit==='seedlings'||!it.unit? +it.qty||0 : 0)); }
 function itemQtyLabel(it){
@@ -3381,13 +3387,13 @@ function itemQtyLabel(it){
   return `${(+it.qty||0).toLocaleString()} ${it.unit||'seedlings'}`;
 }
 function saleSummary(s){ const its = saleItems(s); return its.length===1? its[0].crop : `${its[0].crop} + ${its.length-1} more`; }
-function saleQtyTotal(s){ return saleItems(s).reduce((a,it)=>a+(+it.qty||0),0); }
 const DEFAULT_TRAY_SIZE = 66; /* standard SPN propagation tray; per-crop sizes in the price list override it */
 function saleTraysTotal(s){ return saleItems(s).reduce((a,it)=> a + (it.unit==='trays'? (+it.qty||0) : 0), 0); }
-/* seedlings-per-tray for a crop: the POS price list first, then the most recent
-   tray sale of that crop; null when the workspace has never defined one */
-function traySizeFor(crop){
-  const c = String(crop||'').toLowerCase();
+/* price list only. saleItems() needs a tray size to read legacy records, and the full
+   lookup below walks the sales it would be building, so that path must not go near it */
+function traySizeFromPriceList(crop){
+  const c = String(crop||'').trim().toLowerCase();
+  if(!c) return null; /* every name "includes" the empty string, so guard it */
   const pl = (DATA.priceList||[]).find(p=>{
     if(p.unit!=='trays' || !(+p.traySize>0)) return false;
     const name = (p.name||'').toLowerCase();
@@ -3396,7 +3402,15 @@ function traySizeFor(crop){
     const base = name.replace(/(seedlings?|trays?)/g,' ').replace(/[^a-z0-9]+/g,' ').trim();
     return !!base && base.split(/\s+/).every(w=>c.includes(w));
   });
-  if(pl) return +pl.traySize;
+  return pl? +pl.traySize : null;
+}
+/* seedlings-per-tray for a crop: the POS price list first, then the most recent
+   tray sale of that crop; null when the workspace has never defined one */
+function traySizeFor(crop){
+  const fromList = traySizeFromPriceList(crop);
+  if(fromList) return fromList;
+  const c = String(crop||'').trim().toLowerCase();
+  if(!c) return null;
   for(let i=DATA.cashSales.length-1; i>=0; i--){
     for(const it of saleItems(DATA.cashSales[i])){
       if(it.unit==='trays' && +it.traySize>0 && (it.crop||'').toLowerCase().includes(c)) return +it.traySize;
@@ -3404,9 +3418,46 @@ function traySizeFor(crop){
   }
   return null;
 }
+/* tray size to display with: the priced/last-sold size for the crop where the workspace
+   has one, else the standard 66-cell tray, so a tray figure is never silently
+   downgraded to a seedling count */
+function traySizeOf(crop){ return traySizeFor(crop) || DEFAULT_TRAY_SIZE; }
+/* stock on hand floors: a part tray is not a sellable tray */
+function trayCountOf(crop, seedlings){ return Math.floor((+seedlings||0)/traySizeOf(crop)); }
+/* seedlings already sold round instead: a customer who took most of a tray took a tray */
+function trayEqOf(crop, seedlings){ return Math.round((+seedlings||0)/traySizeOf(crop)); }
+/* ONE conversion rule for every total in the app: pool the seedlings being totalled by
+   crop (seedlings of different crops never share a tray), then convert once. Converting
+   line by line and summing would round each line to nothing, so a nursery selling in
+   small lots would report zero trays against real revenue. */
+function poolTrays(pairs, round){
+  const byCrop = {};
+  pairs.forEach(([crop, seedlings])=>{ const k = crop||'Other'; byCrop[k] = (byCrop[k]||0) + (+seedlings||0); });
+  return Object.entries(byCrop).reduce((a,[c,n])=> a + (round? Math.round(n/traySizeOf(c)) : Math.floor(n/traySizeOf(c))), 0);
+}
+/* stockRows entries: {r: sowing record, viableQty}. Keyed on the crop alone, the same key
+   the per-batch cells use, so a column of batch rows and the total above it never rest on
+   two different tray sizes. Totals pool; per-batch cells floor on their own, so a column
+   of rows can add up to slightly less than its total, which is what part trays mean. */
+function stockTrays(rows){ return poolTrays(rows.map(x=>[x.r.crop, x.viableQty]), false); }
+function salesTrays(sales){
+  let t = 0; const pairs = [];
+  sales.forEach(s=>saleItems(s).forEach(it=>{
+    if(it.unit==='trays') t += (+it.qty||0);
+    else pairs.push([canonicalCrop(it.crop), itemSeedlings(it)]);
+  }));
+  return t + poolTrays(pairs, true);
+}
+function saleTrayEqTotal(s){ return salesTrays([s]); }
+function anyTraySizePriced(){ return (DATA.priceList||[]).some(p=>p.unit==='trays' && +p.traySize>0); }
+/* shown wherever tray figures rest on the 66-cell assumption rather than a priced tray */
+function trayBasisNote(){ return anyTraySizePriced()
+  ? 'Tray sizes come from the POS price list where a tray product is priced for that crop; every other crop is counted in '+DEFAULT_TRAY_SIZE+'-cell trays.'
+  : 'Tray counts assume '+DEFAULT_TRAY_SIZE+'-cell trays; price a tray product in the POS price list to use your own tray size.'; }
 function traysOfLabel(crop, seedlings){
-  const ts = traySizeFor(crop);
-  return ts? '≈ '+Math.floor((+seedlings||0)/ts).toLocaleString()+' trays of '+ts : (+seedlings||0).toLocaleString()+' seedlings';
+  const n = +seedlings||0, t = trayCountOf(crop, n);
+  /* a part tray still has to be visible, or small holdings read as zero stock */
+  return t? '≈ '+t.toLocaleString()+' tray'+(t===1?'':'s')+' of '+traySizeOf(crop) : (n? '< 1 tray ('+n.toLocaleString()+' seedlings)' : '0 trays');
 }
 function saleLooseSeedlings(s){ return saleItems(s).reduce((a,it)=> a + ((it.unit||'seedlings')==='seedlings'? (+it.qty||0) : 0), 0); }
 function saleSeedlingsTotal(s){ return saleItems(s).reduce((a,it)=>a+itemSeedlings(it),0); }
@@ -3427,7 +3478,7 @@ function renderSaleItems(){
       ${SALE_DRAFT.map((row,i)=>{
         const batch = row.batchId? DATA.sowingRecords.find(x=>x.id===row.batchId) : null;
         return `<tr>
-          <td><input list="sale-prod-list" value="${esc(row.product)}" oninput="updSaleRow(${i},'product',this.value)" placeholder="Type or pick">${batch? `<div class="cell-sub">${batchRemaining(batch).toLocaleString()} seedlings left in ${esc(batch.batchCode)}</div>` : ''}</td>
+          <td><input list="sale-prod-list" value="${esc(row.product)}" oninput="updSaleRow(${i},'product',this.value)" placeholder="Type or pick">${batch? (()=>{ const left=batchRemaining(batch); return `<div class="cell-sub">${traysOfLabel(batch.crop, left)} · ${left.toLocaleString()} seedlings left in ${esc(batch.batchCode)}</div>`; })() : ''}</td>
           <td><select onchange="updSaleRow(${i},'unit',this.value)">${SALE_UNITS.map(u=>`<option ${row.unit===u?'selected':''}>${u}</option>`).join('')}</select></td>
           <td><input type="number" min="0" step="any" value="${row.qty}" oninput="updSaleRow(${i},'qty',this.value)"></td>
           <td>${row.unit==='trays'? `<input type="number" min="1" value="${row.traySize||''}" title="Seedlings per tray" oninput="updSaleRow(${i},'traySize',this.value)">` : '<span class="small-muted">-</span>'}</td>
@@ -3878,20 +3929,21 @@ In under 150 words, plain text: suggest sensible rest points along the way (for 
 
 <script>
 /* ================= SALES TRENDS & HISTORY ================= */
-const SALES_CROPS = ['Tomato','Capsicum','Cucumber','Brassica','Other'];
 let salesChartInstance = null;
-let salesSelectedCrops = ['Tomato','Capsicum','Cucumber','Brassica','Other'];
+/* the crop lines follow the data, so the filter tracks what the user switched OFF
+   rather than a fixed list: a crop the nursery starts selling appears on its own */
+let salesDeselected = new Set();
 function renderSalesAnalytics(root){
   const thisYear = new Date().getFullYear();
   root.innerHTML = `
   <div class="view-header"><div><h2>Sales Trends & History</h2><p>Historical sales by crop, to spot seasonal patterns and year-on-year market trend.</p></div></div>
   <div class="card" style="margin-bottom:16px;">
     <div class="form-grid c3">
-      <div class="field field-full" style="grid-column:1/3;"><label>Crops</label>
-        <div class="pill-input-row">${SALES_CROPS.map(c=>`<label class="checkline"><input type="checkbox" value="${c}" class="sa-crop-check" ${salesSelectedCrops.includes(c)?'checked':''} onchange="toggleSalesCrop('${c}',this.checked)"> <span style="display:inline-flex;align-items:center;gap:5px;"><i style="width:9px;height:9px;border-radius:50%;background:${CROP_COLORS[c]};display:inline-block;"></i>${c}</span></label>`).join('')}</div>
+      <div class="field field-full" style="grid-column:1/3;"><label>Crops <span class="small-muted">(top crops in the selected years, by trays)</span></label>
+        <div class="pill-input-row" id="sa-crop-row"></div>
       </div>
-      <div class="field"><label>From year</label><select id="sa-from">${Array.from({length:thisYear-2020+1},(_,i)=>2020+i).map(y=>`<option ${y===2022?'selected':''}>${y}</option>`).join('')}</select></div>
-      <div class="field"><label>To year</label><select id="sa-to">${Array.from({length:thisYear-2020+1},(_,i)=>2020+i).map(y=>`<option ${y===thisYear?'selected':''}>${y}</option>`).join('')}</select></div>
+      <div class="field"><label>From year</label><select id="sa-from" onchange="updateSalesChart()">${Array.from({length:thisYear-2020+1},(_,i)=>2020+i).map(y=>`<option ${y===2022?'selected':''}>${y}</option>`).join('')}</select></div>
+      <div class="field"><label>To year</label><select id="sa-to" onchange="updateSalesChart()">${Array.from({length:thisYear-2020+1},(_,i)=>2020+i).map(y=>`<option ${y===thisYear?'selected':''}>${y}</option>`).join('')}</select></div>
     </div>
     <div style="display:flex;gap:10px;margin-top:12px;flex-wrap:wrap;">
       <button class="btn leaf sm" onclick="updateSalesChart()">Update chart</button>
@@ -3903,15 +3955,15 @@ function renderSalesAnalytics(root){
     <canvas id="sa-canvas" height="110"></canvas>
   </div>
   <div id="sa-summary"></div>
-  <div class="disclaimer">Months with recorded Cash Sale transactions use your actual figures; months without a recorded sale still show modelled historical demo data so the trend line stays continuous - as you record more sales, real data will progressively replace the model.</div>
+  <div class="disclaimer">Quantities are trays per month. Months with recorded Cash Sale transactions use your actual figures (tray lines counted as sold, seedling lines converted at the crop's tray size); months without a recorded sale still show modelled historical demo data so the trend line stays continuous, and real data replaces the model month by month as you record sales. ${trayBasisNote()}</div>
 
   <div class="section-title">Cash sales analysis - recorded transactions<div class="line"></div></div>
   <div id="cash-sales-analysis"></div>
 
-  <div class="section-title">Historical price trend (2000–present)<div class="line"></div></div>
+  <div class="section-title">Historical price trend · KES per tray (2000–present)<div class="line"></div></div>
   <div class="card">
     <canvas id="sa-price-canvas" height="90"></canvas>
-    <div class="disclaimer">Illustrative long-run price trend by crop, modelled with a compounding inflation curve - useful for spotting the shape of long-term price growth, not a substitute for verified market records for a specific year.</div>
+    <div class="disclaimer">Illustrative long-run price trend by crop in KES per tray, modelled with a compounding inflation curve and converted at each crop's tray size - useful for spotting the shape of long-term price growth, not a substitute for verified market records for a specific year. ${trayBasisNote()}</div>
   </div>
 
   <div class="section-title">Clients · statements & annual scoring<div class="line"></div></div>
@@ -3934,9 +3986,13 @@ function computeClients(){
   const map = {};
   DATA.cashSales.forEach(s=>{
     const key = (s.customer||'Unknown').trim().toLowerCase()+'|'+(s.phone||'');
-    if(!map[key]) map[key] = {name:s.customer, phone:s.phone||'', txns:0, qty:0, total:0, lastTs:0, lastDate:null, firstDate:null, sales:[]};
+    if(!map[key]) map[key] = {name:s.customer, phone:s.phone||'', txns:0, qty:0, trays:0, loose:{}, total:0, lastTs:0, lastDate:null, firstDate:null, sales:[]};
     const c = map[key];
     c.txns++; c.qty += saleSeedlingsTotal(s); c.total += s.total;
+    saleItems(s).forEach(it=>{
+      if(it.unit==='trays') c.trays += (+it.qty||0);
+      else { const k = canonicalCrop(it.crop); c.loose[k] = (c.loose[k]||0) + itemSeedlings(it); }
+    });
     if(s.date){
       /* dates stay YYYY-MM-DD strings end to end (a UTC roundtrip shifts a day
          in UTC+3); the timestamp only feeds the recency score */
@@ -3946,6 +4002,9 @@ function computeClients(){
     c.sales.push(s);
   });
   const list = Object.values(map);
+  /* the client's loose seedlings pool per crop across their whole history, then convert
+     once, the same rule salesTrays() applies to any other set of sales */
+  list.forEach(c=>{ c.trays += poolTrays(Object.entries(c.loose), true); });
   const maxSpend = Math.max(...list.map(c=>c.total), 1);
   const maxTx = Math.max(...list.map(c=>c.txns), 1);
   list.forEach(c=>{
@@ -3983,7 +4042,7 @@ function renderClientsSection(){
     columns:[
       {key:'name', label:'Client', val:c=>c.name+' '+c.phone, html:c=>`<div class="cell-main">${esc(c.name)}</div><div class="cell-sub">${esc(c.phone)||'-'}</div>`},
       {key:'txns', label:'Purchases', align:'right', val:c=>c.txns, html:c=>`<span class="mono">${c.txns}</span>`},
-      {key:'qty', label:'Seedlings', align:'right', val:c=>c.qty, html:c=>`<span class="mono">${c.qty.toLocaleString()}</span>`},
+      {key:'qty', label:'Trays', align:'right', val:c=>c.trays, html:c=>`<span class="mono">${c.trays? c.trays.toLocaleString() : (c.qty? '< 1' : '0')}</span><div class="cell-sub">${c.qty.toLocaleString()} seedlings</div>`},
       {key:'total', label:'Total Spend', align:'right', val:c=>c.total, html:c=>`<b class="mono">${money(c.total)}</b>`},
       {key:'last', label:'Last Purchase', val:c=>c.lastDate||'', html:c=>c.lastDate? fmtDate(c.lastDate) : '-'},
       {key:'score', label:'Score', val:c=>c.score, html:c=>`<div class="progress-line" style="width:80px;"><i style="width:${c.score}%;"></i></div><div class="cell-sub mono">${c.score}/100</div>`},
@@ -4010,7 +4069,7 @@ function openClientDrawer(id){
     ${specList([
       ['Score', `<span class="mono">${c.score}/100</span> ${tierChip(c.tier)}`],
       ['Purchases', `<span class="mono">${c.txns}</span> receipt(s)`],
-      ['Bought', `<span class="mono">${c.sales.reduce((a,s)=>a+saleTraysTotal(s),0).toLocaleString()}</span> trays · <span class="mono">${c.qty.toLocaleString()}</span> seedlings eq.`],
+      ['Bought', `<span class="mono">${c.trays? c.trays.toLocaleString()+' tray'+(c.trays===1?'':'s') : (c.qty? '< 1 tray' : '0 trays')}</span> · <span class="mono">${c.qty.toLocaleString()}</span> seedlings eq.`],
       ['Total spend', `<b class="mono">${money(c.total)}</b>`],
       ['First purchase', c.firstDate? fmtDate(c.firstDate) : '-'],
       ['Last purchase', c.lastDate? fmtDate(c.lastDate) : '-'],
@@ -4058,7 +4117,8 @@ function clientStatement(id, fmt){
     let fy = doc.lastAutoTable.finalY + 9;
     doc.setFont(undefined,'bold'); doc.setFontSize(11); doc.setTextColor(38,53,42);
     doc.text('Period total', 14, fy);
-    doc.text(money(total)+'  ·  '+sales.reduce((a,b)=>a+saleTraysTotal(b),0).toLocaleString()+' trays · '+qty.toLocaleString()+' seedlings eq.', 196, fy, {align:'right'});
+    const st = salesTrays(sales);
+    doc.text(money(total)+'  ·  '+(st? st.toLocaleString()+' trays' : (qty? '< 1 tray' : '0 trays'))+' · '+qty.toLocaleString()+' seedlings eq.', 196, fy, {align:'right'});
     fy += 8;
     doc.setFont(undefined,'normal'); doc.setFontSize(8.6); doc.setTextColor(110);
     doc.text('Thank you for growing with '+orgProfile().name+'.', 14, fy);
@@ -4075,8 +4135,16 @@ function renderCashSalesAnalysis(){
   const totalRevenue = sales.reduce((a,b)=>a+b.total,0);
   const totalTrays = sales.reduce((a,b)=>a+saleTraysTotal(b),0);
   const totalLoose = sales.reduce((a,b)=>a+saleLooseSeedlings(b),0);
-  const byCrop = {};
-  sales.forEach(s=>saleItems(s).forEach(it=>{ const c=matchSalesCrop(it.crop)||it.crop; byCrop[c]=(byCrop[c]||0)+(it.seedlings!=null? it.seedlings : it.qty); }));
+  const soldTrays = salesTrays(sales);
+  /* ranking only: crops keep their own name so the top seller is nameable, and each
+     crop's loose seedlings still pool before converting */
+  const byCrop = {}, looseByCrop = {};
+  sales.forEach(s=>saleItems(s).forEach(it=>{
+    const c = canonicalCrop(it.crop)==='Other' ? (it.crop||'Other') : canonicalCrop(it.crop);
+    if(it.unit==='trays') byCrop[c] = (byCrop[c]||0) + (+it.qty||0);
+    else looseByCrop[c] = (looseByCrop[c]||0) + itemSeedlings(it);
+  }));
+  Object.entries(looseByCrop).forEach(([c,n])=>{ byCrop[c] = (byCrop[c]||0) + trayEqOf(c, n); });
   const topCrop = Object.entries(byCrop).sort((a,b)=>b[1]-a[1])[0];
   const byPayment = {};
   sales.forEach(s=>{ byPayment[s.payment]=(byPayment[s.payment]||0)+1; });
@@ -4085,8 +4153,8 @@ function renderCashSalesAnalysis(){
   el.innerHTML = `
     <div class="grid cols-4">
       ${kpi('Total Recorded Revenue', money(totalRevenue), `${sales.length} transaction(s)`, 'sale')}
-      ${kpi('Total Trays Sold', totalTrays.toLocaleString(), totalLoose? '+ '+totalLoose.toLocaleString()+' loose seedlings' : 'across all recorded sales', 'trend')}
-      ${kpi('Top-Selling Crop', topCrop?topCrop[0]:'-', topCrop?topCrop[1].toLocaleString()+' units':'', 'trend')}
+      ${kpi('Total Trays Sold', soldTrays.toLocaleString(), totalLoose? totalTrays.toLocaleString()+' sold as trays · '+totalLoose.toLocaleString()+' loose seedlings converted' : 'across all recorded sales', 'trend')}
+      ${kpi('Top-Selling Crop', topCrop?topCrop[0]:'-', topCrop?topCrop[1].toLocaleString()+' trays':'', 'trend')}
       ${kpi('Avg. Transaction Value', money(Math.round(avgTxn)), topPayment?`Most used: ${topPayment[0]}`:'', 'sale')}
     </div>
   `;
@@ -4096,18 +4164,24 @@ function renderPriceTrendChart(){
   if(typeof Chart === 'undefined'){ return; }
   const canvas = document.getElementById('sa-price-canvas');
   if(!canvas) return;
+  if(!(DATA.priceHistory||[]).length){ canvas.parentElement.innerHTML = '<div class="empty"><b>No price history yet</b><div>This illustrative long-run series ships with the demo dataset. A workspace started empty has none, so nothing is charted here.</div></div>'; return; }
   const years = [...new Set(DATA.priceHistory.map(r=>r.year))].sort();
-  const datasets = SALES_CROPS.map(crop=>{
+  /* rows are stored per seedling (that is what the series was modelled in, and what
+     older workspaces already hold); the chart converts to per tray at render time so
+     nothing is double converted if the demo data is ever reseeded */
+  const crops = [...new Set(DATA.priceHistory.map(r=>r.crop))];
+  const datasets = crops.map((crop,i)=>{
+    const ts = traySizeOf(crop), assumed = !traySizeFor(crop);
     const byYear = {};
-    DATA.priceHistory.filter(r=>r.crop===crop).forEach(r=>{ byYear[r.year]=r.price; });
-    return { label:crop, data: years.map(y=>byYear[y]||null), borderColor:CROP_COLORS[crop]||'#888', backgroundColor:'transparent', tension:0.3, pointRadius:0, borderWidth:2.2 };
+    DATA.priceHistory.filter(r=>r.crop===crop).forEach(r=>{ byYear[r.year] = Math.round((+r.price||0)*ts); });
+    return { label:crop+' · tray of '+ts+(assumed? ' (assumed)' : ''), data: years.map(y=>byYear[y]==null? null : byYear[y]), borderColor:cropColor(crop,i), backgroundColor:'transparent', tension:0.3, pointRadius:0, borderWidth:2.2 };
   });
   if(priceChartInstance) priceChartInstance.destroy();
   priceChartInstance = new Chart(canvas.getContext('2d'), {
     type:'line',
     data:{ labels:years, datasets },
     options:{ responsive:true, plugins:{ legend:{position:'bottom', labels:{boxWidth:10, boxHeight:10}} },
-      scales:{ x:{ grid:{display:false}, ticks:{ maxTicksLimit:14, font:{size:10} } }, y:{ border:{display:false}, grid:{color:'#EEF1EA'}, title:{display:true,text:'Illustrative price (KES/seedling)'} } } }
+      scales:{ x:{ grid:{display:false}, ticks:{ maxTicksLimit:14, font:{size:10} } }, y:{ border:{display:false}, grid:{color:'#EEF1EA'}, title:{display:true,text:'Illustrative price (KES per tray)'} } } }
   });
 }
 async function loadCommodityPricing(){
@@ -4137,13 +4211,8 @@ Keep each note under 15 words.`}]}] })
   }
 }
 function toggleSalesCrop(crop, checked){
-  if(checked){ if(!salesSelectedCrops.includes(crop)) salesSelectedCrops.push(crop); }
-  else{ salesSelectedCrops = salesSelectedCrops.filter(c=>c!==crop); }
+  if(checked) salesDeselected.delete(crop); else salesDeselected.add(crop);
   updateSalesChart();
-}
-function matchSalesCrop(line){
-  /* sales of crops outside the four tracked lines are charted as "Other" instead of vanishing */
-  return SALES_CROPS.find(c => c!=='Other' && (line||'').toLowerCase().includes(c.toLowerCase())) || 'Other';
 }
 /* canonical crop name for a free-text sale line ("Tomato Zara F1 · TST-1" -> "Tomato"),
    recognised from the common-crop list, sowing records and seed lots */
@@ -4167,6 +4236,9 @@ function canonicalCrop(line){
   return hit || 'Other';
 }
 const EXTRA_CROP_COLORS = ['#3E6FA8','#7A5D22','#5A4B7E','#C8842A','#4C8C57','#8C5518'];
+/* the four original crops keep their house colours; anything else the nursery sells
+   picks a stable colour from its position in the series list */
+function cropColor(crop, i){ return CROP_COLORS[crop] || EXTRA_CROP_COLORS[i % EXTRA_CROP_COLORS.length]; }
 /* per-month trays/seedlings by canonical crop (dashboard chart: lines follow the data) */
 function realSalesByMonthDetailed(){
   const map = {};
@@ -4175,49 +4247,80 @@ function realSalesByMonthDetailed(){
     saleItems(s).forEach(it=>{
       const crop = canonicalCrop(it.crop);
       const key = `${crop}|${d.getFullYear()}|${d.getMonth()+1}`;
-      if(!map[key]) map[key] = {crop, year:d.getFullYear(), month:d.getMonth()+1, qty:0, trays:0, revenue:0};
-      map[key].qty += (it.seedlings!=null? it.seedlings : it.qty);
-      map[key].trays += it.unit==='trays' ? (+it.qty||0) : Math.round((it.seedlings!=null? it.seedlings : +it.qty||0) / (traySizeFor(it.crop) || DEFAULT_TRAY_SIZE));
+      if(!map[key]) map[key] = {crop, year:d.getFullYear(), month:d.getMonth()+1, qty:0, trays:0, loose:0, revenue:0};
+      /* itemSeedlings is 0 for kg, pcs and bag lines, which are produce, not seedlings */
+      map[key].qty += itemSeedlings(it);
+      if(it.unit==='trays') map[key].trays += (+it.qty||0); else map[key].loose += itemSeedlings(it);
       map[key].revenue += it.total;
     });
   });
-  return Object.values(map);
+  /* the month's loose seedlings for a crop convert once, not line by line */
+  return Object.values(map).map(r=>({...r, trays: r.trays + trayEqOf(r.crop, r.loose)}));
 }
-function realSalesByMonth(){
-  const map = {};
-  DATA.cashSales.forEach(s=>{
-    const d = new Date(s.date+'T00:00:00');
-    saleItems(s).forEach(it=>{
-      const crop = matchSalesCrop(it.crop);
-      if(!crop) return;
-      const key = `${crop}|${d.getFullYear()}|${d.getMonth()+1}`;
-      if(!map[key]) map[key] = {crop, year:d.getFullYear(), month:d.getMonth()+1, qty:0, trays:0, revenue:0};
-      map[key].qty += (it.seedlings!=null? it.seedlings : it.qty);
-      /* actual tray lines count 1:1; seedling lines convert with the crop's tray size */
-      map[key].trays += it.unit==='trays' ? (+it.qty||0) : Math.round((it.seedlings!=null? it.seedlings : +it.qty||0) / (traySizeFor(it.crop) || DEFAULT_TRAY_SIZE));
-      map[key].revenue += it.total;
-    });
-  });
-  return Object.values(map);
+/* modelled demo history fills only the months with no recorded sale at all, so a single
+   month is never half measured and half modelled */
+function mergedSalesRows(){
+  const real = realSalesByMonthDetailed().map(r=>({...r, recorded:true}));
+  const realMonths = new Set(real.map(r=>`${r.year}|${r.month}`));
+  /* the flag has to survive into the exports: once salesTrayValue fills in r.trays there
+     is nothing else left to tell a recorded month from a modelled one */
+  return [...DATA.salesHistory.filter(r=>!realMonths.has(`${r.year}|${r.month}`)).map(r=>({...r, recorded:false})), ...real];
+}
+/* recorded tray lines count 1:1; seedling lines and modelled history convert at the
+   crop's own tray size */
+function salesTrayValue(r){ return r.trays!=null ? r.trays : trayEqOf(r.crop, r.qty); }
+function salesCropsFor(rows){
+  const totals = {};
+  rows.forEach(r=>{ if(r.crop!=='Other') totals[r.crop] = (totals[r.crop]||0) + salesTrayValue(r); });
+  /* ties break by name so the pill row does not reshuffle between renders */
+  const top = Object.entries(totals).sort((a,b)=> b[1]-a[1] || String(a[0]).localeCompare(String(b[0]))).slice(0,6).map(([c])=>c);
+  return [...top, ...(rows.some(r=>r.crop==='Other' || !top.includes(r.crop))? ['Other'] : [])];
+}
+/* the two selects are independent, so a "to" earlier than "from" would silently chart
+   nothing; treat it as a single year rather than an empty range */
+function salesYearRange(){
+  const thisYear = new Date().getFullYear();
+  const num = (id, fallback) => { const v = +(document.getElementById(id)||{}).value; return Number.isFinite(v) && v>1990 && v<2200 ? v : fallback; };
+  const from = num('sa-from', thisYear-3);
+  return { from, to: Math.max(from, num('sa-to', thisYear)) };
+}
+function salesRangeRows(){
+  const {from, to} = salesYearRange();
+  return mergedSalesRows().filter(r=>r.year>=from && r.year<=to);
 }
 function filteredSalesData(){
-  const from = +document.getElementById('sa-from').value;
-  const to = +document.getElementById('sa-to').value;
-  const real = realSalesByMonth();
-  const realKeys = new Set(real.map(r=>`${r.crop}|${r.year}|${r.month}`));
-  const modelled = DATA.salesHistory.filter(r=> !realKeys.has(`${r.crop}|${r.year}|${r.month}`));
-  return [...modelled, ...real].filter(r=> salesSelectedCrops.includes(r.crop) && r.year>=from && r.year<=to);
+  const rows = salesRangeRows();
+  const crops = salesCropsFor(rows);
+  return rows.map(r=>({...r, crop: crops.includes(r.crop)? r.crop : 'Other', trays: salesTrayValue(r)}))
+             .filter(r=>!salesDeselected.has(r.crop));
+}
+function renderSalesCropRow(crops){
+  const row = document.getElementById('sa-crop-row');
+  if(!row) return;
+  const key = crops.join('|');
+  if(row.dataset.key === key){
+    /* same crops: sync the boxes in place rather than re-rendering the row under the cursor */
+    row.querySelectorAll('.sa-crop-check').forEach(i=>{ i.checked = !salesDeselected.has(i.value); });
+    return;
+  }
+  row.dataset.key = key;
+  row.innerHTML = crops.length
+    ? crops.map((c,i)=>`<label class="checkline"><input type="checkbox" value="${esc(c)}" class="sa-crop-check" ${salesDeselected.has(c)?'':'checked'} onchange="toggleSalesCrop(this.value,this.checked)"> <span style="display:inline-flex;align-items:center;gap:5px;"><i style="width:9px;height:9px;border-radius:50%;background:${cropColor(c,i)};display:inline-block;"></i>${esc(c)}</span></label>`).join('')
+    : '<span class="small-muted">No sales recorded in this range yet.</span>';
 }
 function updateSalesChart(){
   if(typeof Chart === 'undefined'){ document.getElementById('sa-canvas').parentElement.innerHTML='<div class="empty"><b>Chart library unavailable</b><div>Could not load Chart.js from CDN - check your connection.</div></div>'; return; }
+  const {from, to} = salesYearRange();
+  const crops = salesCropsFor(salesRangeRows());
+  renderSalesCropRow(crops);
+  const active = crops.filter(c=>!salesDeselected.has(c));
   const data = filteredSalesData();
-  const from = +document.getElementById('sa-from').value, to = +document.getElementById('sa-to').value;
   const labels = [];
   for(let y=from;y<=to;y++) for(let m=1;m<=12;m++) labels.push(`${y}-${String(m).padStart(2,'0')}`);
-  const datasets = salesSelectedCrops.map(crop=>{
+  const datasets = active.map(crop=>{
     const byLabel = {};
-    data.filter(r=>r.crop===crop).forEach(r=>{ byLabel[`${r.year}-${String(r.month).padStart(2,'0')}`] = r.qty; });
-    return { label: crop, data: labels.map(l=>byLabel[l]||0), borderColor: CROP_COLORS[crop]||'#888', backgroundColor:'transparent', tension:0.35, pointRadius:0, borderWidth:2.4 };
+    data.filter(r=>r.crop===crop).forEach(r=>{ const k=`${r.year}-${String(r.month).padStart(2,'0')}`; byLabel[k] = (byLabel[k]||0) + r.trays; });
+    return { label: crop, data: labels.map(l=>byLabel[l]||0), borderColor: cropColor(crop, crops.indexOf(crop)), backgroundColor:'transparent', tension:0.35, pointRadius:0, borderWidth:2.4 };
   });
   const ctx = document.getElementById('sa-canvas').getContext('2d');
   if(salesChartInstance) salesChartInstance.destroy();
@@ -4225,29 +4328,31 @@ function updateSalesChart(){
     type:'line',
     data:{ labels, datasets },
     options:{ responsive:true, interaction:{mode:'index',intersect:false},
-      plugins:{ legend:{position:'bottom', labels:{boxWidth:10, boxHeight:10}} },
-      scales:{ x:{ grid:{display:false}, ticks:{ maxTicksLimit:14, font:{size:10} } }, y:{ border:{display:false}, grid:{color:'#EEF1EA'}, title:{display:true,text:'Seedlings sold (qty/month)'} } } }
+      plugins:{ legend:{position:'bottom', labels:{boxWidth:10, boxHeight:10}},
+        tooltip:{ callbacks:{ label: c=>`${c.dataset.label}: ${(+c.parsed.y||0).toLocaleString()} tray${c.parsed.y===1?'':'s'}` } } },
+      scales:{ x:{ grid:{display:false}, ticks:{ maxTicksLimit:14, font:{size:10} } }, y:{ border:{display:false}, grid:{color:'#EEF1EA'}, title:{display:true,text:'Trays sold (per month)'} } } }
   });
-  const totalQty = data.reduce((a,b)=>a+b.qty,0);
+  const totalTrays = data.reduce((a,b)=>a+b.trays,0);
+  const totalQty = data.reduce((a,b)=>a+(+b.qty||0),0);
   const totalRev = data.reduce((a,b)=>a+b.revenue,0);
   const years = [...new Set(data.map(r=>r.year))].sort();
   let yoy = '-';
   if(years.length>=2){
-    const firstYearQty = data.filter(r=>r.year===years[0]).reduce((a,b)=>a+b.qty,0);
-    const lastYearQty = data.filter(r=>r.year===years[years.length-1]).reduce((a,b)=>a+b.qty,0);
-    if(firstYearQty>0) yoy = (((lastYearQty-firstYearQty)/firstYearQty)*100).toFixed(0)+'% over the period';
+    const firstYearTrays = data.filter(r=>r.year===years[0]).reduce((a,b)=>a+b.trays,0);
+    const lastYearTrays = data.filter(r=>r.year===years[years.length-1]).reduce((a,b)=>a+b.trays,0);
+    if(firstYearTrays>0) yoy = (((lastYearTrays-firstYearTrays)/firstYearTrays)*100).toFixed(0)+'% over the period';
   }
   document.getElementById('sa-summary').innerHTML = `
     <div class="grid cols-3" style="margin-top:16px;">
-      ${kpi('Seedlings Sold (equivalent)', totalQty.toLocaleString(), `${salesSelectedCrops.join(', ')||'-'}`, 'trend')}
+      ${kpi('Trays Sold', totalTrays.toLocaleString(), `${totalQty.toLocaleString()} seedlings equivalent, modelled months included · ${active.join(', ')||'-'}`, 'trend')}
       ${kpi('Total Estimated Revenue', money(totalRev), `${from}–${to}`, 'sale')}
-      ${kpi('Growth (first → last year)', yoy, 'Based on selected crops & range', 'trend')}
+      ${kpi('Growth (first → last year)', yoy, 'Trays sold, selected crops & range', 'trend')}
     </div>
   `;
 }
 function exportSalesExcel(){
   if(typeof XLSX === 'undefined'){ toast('Excel library unavailable - check your connection.','err'); return; }
-  const data = filteredSalesData().map(r=>({Crop:r.crop, Year:r.year, Month:r.month, 'Quantity Sold':r.qty, 'Revenue (KES)':r.revenue}));
+  const data = filteredSalesData().map(r=>({Crop:r.crop, Year:r.year, Month:r.month, 'Trays Sold':r.trays, 'Seedlings (equivalent)':r.qty, 'Revenue (KES)':r.revenue, Source: r.recorded? 'Recorded sales' : 'Modelled demo history'}));
   if(!data.length){ toast('No data in the selected range.','err'); return; }
   const ws = excelSheet('Sales Trends & History', data);
   const wb = XLSX.utils.book_new();
@@ -4259,11 +4364,13 @@ function exportSalesPDF(){
   if(typeof window.jspdf === 'undefined'){ toast('PDF library unavailable - check your connection.','err'); return; }
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF();
-  const y0 = pdfLetterhead(doc, 'Sales Trend Report', `Crops: ${salesSelectedCrops.join(', ')} · Range: ${document.getElementById('sa-from').value}–${document.getElementById('sa-to').value}`);
+  const shown = salesCropsFor(salesRangeRows()).filter(c=>!salesDeselected.has(c));
+  const {from, to} = salesYearRange();
+  const y0 = pdfLetterhead(doc, 'Sales Trend Report', `Crops: ${shown.join(', ')||'-'} · Range: ${from}-${to} · Quantities in trays. ${trayBasisNote()} Months with no recorded sale are marked Modelled.`);
   const canvas = document.getElementById('sa-canvas');
   try{ const imgData = canvas.toDataURL('image/png'); doc.addImage(imgData, 'PNG', 14, y0+2, 180, 80); }catch(e){}
-  const data = filteredSalesData().map(r=>[r.crop, r.year, r.month, r.qty.toLocaleString(), money(r.revenue)]);
-  doc.autoTable({ startY: y0+88, head:[['Crop','Year','Month','Qty Sold','Revenue']], body:data, styles:{fontSize:7}, headStyles:{fillColor:[49,92,58]} });
+  const data = filteredSalesData().map(r=>[r.crop, r.year, r.month, r.trays.toLocaleString(), (+r.qty||0).toLocaleString(), money(r.revenue), r.recorded? 'Recorded' : 'Modelled']);
+  doc.autoTable({ startY: y0+88, head:[['Crop','Year','Month','Trays','Seedlings eq.','Revenue','Source']], body:data, styles:{fontSize:7}, headStyles:{fillColor:[49,92,58]} });
   doc.save(`SPN_Sales_History_${Date.now()}.pdf`);
   logActivity('Exported sales history to PDF.');
 }
@@ -4307,9 +4414,10 @@ function openBatchDrawer(id){
     <div class="small-muted" style="margin-bottom:16px;">Day ${c.daysElapsed} of ${c.totalDays} (${c.pct}%) · ${c.stage<4? c.daysLeft+' day(s) to transplant-ready' : 'Ready for sale now'}</div>
     ${specList([
       ['Status', stockStatusBadge(STAGES[c.stage-1])],
-      ['Quantity sown', `<span class="mono">${r.qty.toLocaleString()}</span>`],
-      ['Est. viable', `<b class="mono">${viableQty.toLocaleString()}</b> at ${r.germinationPct}% germination`],
-      ['Sold / remaining', `<span class="mono">${soldQty.toLocaleString()}</span> sold · <b class="mono">${remainingQty.toLocaleString()}</b> remaining${r.closed? ' · '+st('slate','Closed') : ''}`],
+      ['Quantity sown', `<span class="mono">${r.qty.toLocaleString()}</span> seeds`],
+      ['Est. viable', `<b class="mono">${viableQty.toLocaleString()}</b> seedlings at ${r.germinationPct}% germination`],
+      ['Sold / remaining', `<span class="mono">${soldQty.toLocaleString()}</span> sold · <b class="mono">${remainingQty.toLocaleString()}</b> seedlings remaining${r.closed? ' · '+st('slate','Closed') : ''}`],
+      ['Remaining in trays', `<b class="mono">${traysOfLabel(r.crop, remainingQty)}</b>`],
       ['Date sown', fmtDate(r.dateSown)],
       ['Est. ready date', fmtDate(c.readyDate)+` (${r.readyDays}-day cycle)`],
       ['Bay', esc(r.bay)],
@@ -4720,22 +4828,21 @@ function renderSeedlingStock(root){
     const viableQty = batchRemaining(r); /* viable seedlings still in the nursery (sales and closed batches deducted) */
     return {id:r.id, r, c, viableQty};
   });
-  const readyRows = rows.filter(x=>x.c.stage===4);
+  const readyRows = rows.filter(x=>x.c.stage===4 && x.viableQty>0);
   const readyTotal = readyRows.reduce((a,b)=>a+b.viableQty,0);
   root.innerHTML = `
-  <div class="view-header"><div><h2>Seedling Stock</h2><p>Greenhouse inventory computed live from Sowing Data Entry - every batch sown appears here automatically as it grows.</p></div>
+  <div class="view-header"><div><h2>Seedling Stock</h2><p>Greenhouse inventory computed live from Sowing Data Entry - every batch sown appears here automatically as it grows. Quantities are shown in trays, with the seedling count beneath. ${trayBasisNote()}</p></div>
   <button class="btn secondary" onclick="nav('sowing')">+ Record a new sowing to add stock</button></div>
   <div class="grid cols-3" style="margin-bottom:16px;">
-    ${kpi('Ready for Sale (viable est.)', readyTotal.toLocaleString(), `seedlings across ${readyRows.length} batch(es)`, 'stock')}
     ${(()=>{
-      /* trays per crop where a tray size is known (price list or last tray sale) */
+      const t = stockTrays(readyRows);
+      return kpi('Ready for Sale', t? '≈ '+t.toLocaleString()+' trays' : (readyTotal? '< 1 tray' : '0 trays'), `${readyTotal.toLocaleString()} seedlings across ${readyRows.length} batch(es)`, 'stock');
+    })()}
+    ${(()=>{
+      /* pooled by crop at that crop's tray size, whatever growth stage the batches are in */
       const total = rows.reduce((a,b)=>a+b.viableQty,0);
-      let trays = 0, converted = 0;
-      rows.filter(x=>x.viableQty>0).forEach(x=>{ const ts = traySizeFor(x.r.crop+' '+x.r.variety); if(ts){ trays += Math.floor(x.viableQty/ts); converted += x.viableQty; } });
-      const rest = total - converted;
-      return trays
-        ? kpi('Total Nursery Stock', '≈ '+trays.toLocaleString()+' trays', total.toLocaleString()+' seedlings'+(rest>0? ' ('+rest.toLocaleString()+' without a tray size)':'')+` · ${rows.length} batches`, 'sow')
-        : kpi('Total Nursery Stock', total.toLocaleString(), `viable est. across ${rows.length} batches`, 'sow');
+      const trays = stockTrays(rows);
+      return kpi('Total Nursery Stock', trays? '≈ '+trays.toLocaleString()+' trays' : (total? '< 1 tray' : '0 trays'), total.toLocaleString()+` seedlings viable est. · ${rows.length} batches`, 'sow');
     })()}
     ${kpi('Next Batch Ready', (()=>{ const up=rows.filter(x=>x.c.stage<4).sort((a,b)=>a.c.daysLeft-b.c.daysLeft)[0]; return up? up.c.daysLeft+'d' : '-'; })(), (()=>{ const up=rows.filter(x=>x.c.stage<4).sort((a,b)=>a.c.daysLeft-b.c.daysLeft)[0]; return up? up.r.variety+' · '+fmtDate(up.c.readyDate) : 'All batches ready'; })(), 'status')}
   </div>
@@ -4750,8 +4857,8 @@ function renderSeedlingStock(root){
       {key:'crop', label:'Crop', val:x=>x.r.crop},
       {key:'variety', label:'Variety', val:x=>x.r.variety},
       {key:'bay', label:'Bay', val:x=>x.r.bay},
-      {key:'sown', label:'Sown Qty', align:'right', val:x=>+x.r.qty||0, html:x=>`<span class="mono">${(+x.r.qty||0).toLocaleString()}</span>`},
-      {key:'viable', label:'Est. Viable Qty', align:'right', val:x=>x.viableQty, html:x=>`<b class="mono">${x.viableQty.toLocaleString()}</b>`},
+      {key:'sown', label:'Seeds Sown', align:'right', val:x=>+x.r.qty||0, html:x=>`<span class="mono">${(+x.r.qty||0).toLocaleString()}</span>`},
+      {key:'viable', label:'Est. Viable Trays', align:'right', val:x=>trayCountOf(x.r.crop, x.viableQty), html:x=>{ const t=trayCountOf(x.r.crop, x.viableQty); return `<b class="mono">${t? '≈ '+t.toLocaleString() : (x.viableQty? '< 1' : '0')}</b><div class="cell-sub">${x.viableQty.toLocaleString()} seedlings</div>`; }},
       {key:'readyDate', label:'Ready Date', val:x=>x.c.readyDate, html:x=>fmtDate(x.c.readyDate)},
       {key:'ready', label:'Countdown', val:x=>x.c.stage===4? -1 : x.c.daysLeft, html:x=>x.c.stage<4? st(x.c.daysLeft<=3?'gold':'slate', x.c.daysLeft+' day(s) left') : st('green','Ready now')},
       {key:'growth', label:'Growth', val:x=>x.c.pct, html:x=>`<div class="progress-line" style="width:90px;"><i style="width:${x.c.pct}%;"></i></div><div class="cell-sub mono">${x.c.pct}%</div>`},
@@ -7262,11 +7369,16 @@ function buildReport(key){
       return [r.batchCode, r.crop, r.variety, fmtDate(r.dateSown), r.qty.toLocaleString(), r.germinationPct+'%', v.toLocaleString(), sold.toLocaleString(), rem.toLocaleString(), r.closed? 'Closed' : STAGES[c.stage-1], fmtDate(c.readyDate)]; });
     const totalSown = DATA.sowingRecords.reduce((a,b)=>a+b.qty,0);
     const totalViable = DATA.sowingRecords.reduce((a,b)=>a+batchRemaining(b),0);
-    const ready = DATA.sowingRecords.filter(r=>computeStage(r).stage===4).reduce((a,b)=>a+batchRemaining(b),0);
+    const readyRecs = DATA.sowingRecords.filter(r=>computeStage(r).stage===4);
+    const ready = readyRecs.reduce((a,b)=>a+batchRemaining(b),0);
+    /* seedling figures stay: they are the KEPHIS production record. Trays are added
+       beside them because that is how the nursery sells and reports commercially. */
+    const readyTrays = stockTrays(readyRecs.map(r=>({r, viableQty: batchRemaining(r)})));
+    const allTrays = stockTrays(DATA.sowingRecords.map(r=>({r, viableQty: batchRemaining(r)})));
     const avgGerm = DATA.sowingRecords.length? (DATA.sowingRecords.reduce((a,b)=>a+b.germinationPct,0)/DATA.sowingRecords.length).toFixed(1):'0';
     return { title:'Nursery Production Report', subtitle:stamp,
       sections:[{heading:'Production by batch', head:['Batch','Crop','Variety','Sown','Qty Sown','Germ. %','Est. Viable','Sold','Remaining','Stage','Ready Date'], rows}],
-      summary:[['Batches', DATA.sowingRecords.length], ['Total seeds sown', totalSown.toLocaleString()], ['Estimated viable seedlings', totalViable.toLocaleString()], ['Ready for sale now', ready.toLocaleString()], ['Average germination', avgGerm+'%']] };
+      summary:[['Batches', DATA.sowingRecords.length], ['Total seeds sown', totalSown.toLocaleString()], ['Estimated viable trays', '≈ '+allTrays.toLocaleString()], ['Estimated viable seedlings', totalViable.toLocaleString()], ['Ready for sale now', '≈ '+readyTrays.toLocaleString()+' trays ('+ready.toLocaleString()+' seedlings)'], ['Average germination', avgGerm+'%'], ['Tray basis', trayBasisNote()]] };
   }
   if(key==='compliance'){
     const rows = DATA.sowingRecords.map(r=>[r.batchCode, r.crop+' '+r.variety, r.seedLot||'-', r.seedSource||'-', r.certNo||'-', r.seedClass, fmtDate(r.dateSown), r.sownBy]);
@@ -7288,22 +7400,22 @@ function buildReport(key){
         {heading:'Sales register', head:['Receipt','Date','Customer','KRA PIN','Item (batch)','Qty','Unit Price','Total','VAT Treatment','VAT (KES)','Payment','Served By'], rows},
         {heading:'Revenue by month', head:['Month','Revenue'], rows: monthRows.length? monthRows : [['-','-']]},
       ],
-      summary:[['Receipts', sales.length], ['Trays sold', sales.reduce((a,b)=>a+saleTraysTotal(b),0).toLocaleString() + (sales.reduce((a,b)=>a+saleLooseSeedlings(b),0)? ' (+ '+sales.reduce((a,b)=>a+saleLooseSeedlings(b),0).toLocaleString()+' loose seedlings)' : '')], ['Seedlings (equivalent)', sales.reduce((a,b)=>a+saleSeedlingsTotal(b),0).toLocaleString()], ['Total revenue', money(revenue)], ['VAT in standard-rated sales (16% inclusive)', money(vatTotal)], ['Company KRA PIN', DATA.companyKraPin||'Not set']] };
+      summary:[['Receipts', sales.length], ['Trays sold (equivalent)', salesTrays(sales).toLocaleString()], ['Sold as trays at the till', sales.reduce((a,b)=>a+saleTraysTotal(b),0).toLocaleString()], ['Seedlings (equivalent)', sales.reduce((a,b)=>a+saleSeedlingsTotal(b),0).toLocaleString()], ['Total revenue', money(revenue)], ['VAT in standard-rated sales (16% inclusive)', money(vatTotal)], ['Company KRA PIN', DATA.companyKraPin||'Not set'], ['Tray basis', trayBasisNote()]] };
   }
   if(key==='stock'){
     const cons = DATA.consumables.map(c=>[c.name, c.qty+' '+c.unit, money(c.unitCost), money(c.qty*c.unitCost), c.qty<=c.reorder?'Reorder':'Healthy']);
-    const seed = DATA.sowingRecords.map(r=>{ const c=computeStage(r); return [r.batchCode, r.crop+' '+r.variety, batchRemaining(r).toLocaleString(), STAGES[c.stage-1], fmtDate(c.readyDate)]; });
+    const seed = DATA.sowingRecords.map(r=>{ const c=computeStage(r); return [r.batchCode, r.crop+' '+r.variety, trayCountOf(r.crop, batchRemaining(r)).toLocaleString(), batchRemaining(r).toLocaleString(), STAGES[c.stage-1], fmtDate(c.readyDate)]; });
     const herd = (DATA.livestockInventory||[]).filter(a=>a.status==='Active').map(a=>[a.tag, SPECIES_LABEL(a.species), (a.qty||1).toLocaleString(), a.weightKg? a.weightKg+' kg':'-', money(a.cost||0)]);
     const consValue = DATA.consumables.reduce((a,b)=>a+b.qty*b.unitCost,0);
     const herdValue = (DATA.livestockInventory||[]).filter(a=>a.status==='Active').reduce((x,a)=>x+(a.cost||0),0);
     const sections = [
       {heading:'Consumables', head:['Item','On Hand','Unit Cost','Stock Value','Status'], rows:cons},
-      {heading:'Seedling stock', head:['Batch','Crop / Variety','Est. Viable Qty','Stage','Ready Date'], rows:seed},
+      {heading:'Seedling stock', head:['Batch','Crop / Variety','Est. Viable Trays','Est. Viable Seedlings','Stage','Ready Date'], rows:seed},
     ];
     if(herd.length) sections.push({heading:'Livestock (active)', head:['Tag','Species','Qty','Avg Weight','Value'], rows:herd});
     return { title:'Stock Valuation Report', subtitle:stamp,
       sections,
-      summary:[['Consumables value at cost', money(consValue)], ['Consumable lines', DATA.consumables.length], ['Seedling batches', DATA.sowingRecords.length], ['Est. viable seedlings', DATA.sowingRecords.reduce((a,b)=>a+batchRemaining(b),0).toLocaleString()], ['Livestock value (acquisition)', money(herdValue)]] };
+      summary:[['Consumables value at cost', money(consValue)], ['Consumable lines', DATA.consumables.length], ['Seedling batches', DATA.sowingRecords.length], ['Est. viable trays', '≈ '+stockTrays(DATA.sowingRecords.map(r=>({r, viableQty: batchRemaining(r)}))).toLocaleString()], ['Est. viable seedlings', DATA.sowingRecords.reduce((a,b)=>a+batchRemaining(b),0).toLocaleString()], ['Livestock value (acquisition)', money(herdValue)], ['Tray basis', trayBasisNote()]] };
   }
   if(key==='hr'){
     const rows = DATA.staff.map(s=>[s.name, s.idNo||'-', s.phone||'-', s.type, s.casualId||'-', s.department||'-', fmtDate(s.dateJoined), s.idUploaded?'Yes':'No', (s.rating||0)+'/5']);
