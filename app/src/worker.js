@@ -84,7 +84,7 @@ function preflight(origin) {
   return new Response(null, { status: 204, headers: {
     'Access-Control-Allow-Origin': origin,
     'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Release-Version, X-Release-Notes, X-File-Name, X-Base-Hash',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Release-Version, X-Release-Notes, X-File-Name, X-Base-Hash, X-Deleted-Ids',
     'Access-Control-Max-Age': '86400',
     'Vary': 'Origin',
   } });
@@ -140,6 +140,7 @@ async function ensureSchema(env) {
     env.SPN_DB.prepare('CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, user_id TEXT NOT NULL, expires_at INTEGER NOT NULL, created_at INTEGER)'),
     env.SPN_DB.prepare('CREATE TABLE IF NOT EXISTS invites (token TEXT PRIMARY KEY, role TEXT, created_by TEXT, created_at INTEGER, expires_at INTEGER, used_by TEXT)'),
     env.SPN_DB.prepare('CREATE TABLE IF NOT EXISTS files (id TEXT PRIMARY KEY, owner TEXT, mime TEXT, data TEXT NOT NULL, size INTEGER, created_at INTEGER)'),
+    env.SPN_DB.prepare('CREATE TABLE IF NOT EXISTS collection_history (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, json TEXT NOT NULL, count INTEGER, updated_at INTEGER, by TEXT)'),
     env.SPN_DB.prepare('CREATE TABLE IF NOT EXISTS releases (id TEXT PRIMARY KEY, version TEXT NOT NULL, notes TEXT, file_name TEXT, r2_key TEXT NOT NULL, size INTEGER, platform TEXT, created_at INTEGER, created_by TEXT)'),
   ]);
   /* migration: invites gained an email column for emailed invitations */
@@ -148,6 +149,10 @@ async function ensureSchema(env) {
   try { await env.SPN_DB.prepare('ALTER TABLE users ADD COLUMN last_login INTEGER').run(); } catch (e) {}
   /* migration: sessions gained created_at so a live session can be dated */
   try { await env.SPN_DB.prepare('ALTER TABLE sessions ADD COLUMN created_at INTEGER').run(); } catch (e) {}
+
+  /* migration: collections carry their content hash so the optimistic-concurrency write
+     can be one conditional UPDATE instead of a read-compare-write with a gap in between */
+  try { await env.SPN_DB.prepare('ALTER TABLE collections ADD COLUMN hash TEXT').run(); } catch (e) {}
   schemaReady = true;
 }
 
@@ -216,6 +221,11 @@ async function requireSession(req, env) {
   if (row.expires_at < Date.now()) {
     await env.SPN_DB.prepare('DELETE FROM sessions WHERE token = ?').bind(token).run();
     return null;
+  }
+  /* a session in use slides forward: only a device idle for the whole TTL has to sign in
+     again, so a phone that syncs daily is never stalled by an expired token */
+  if (row.expires_at - Date.now() < SESSION_TTL_MS / 2) {
+    try { await env.SPN_DB.prepare('UPDATE sessions SET expires_at = ? WHERE token = ?').bind(Date.now() + SESSION_TTL_MS, token).run(); } catch (e) {}
   }
   const user = JSON.parse(row.user_json);
   /* status is re-read on every request: suspending an account has to end it now,
@@ -311,14 +321,47 @@ async function buildBackupDump(env) {
   for (const r of rows) { try { collections[r.name] = JSON.parse(r.json); } catch (e) {} }
   return { kind: 'spn-erp-backup', version: 2, exportedAt: new Date().toISOString(), users, collections };
 }
-async function putCollection(env, name, jsonText) {
+const HISTORY_KEEP = 40;
+/* the version being replaced is kept, so a bad merge or a mistaken clear can be undone
+   from Users & Access; a write that changes nothing keeps no version */
+async function putCollection(env, name, jsonText, by) {
+  const prev = await env.SPN_DB.prepare('SELECT json, updated_at FROM collections WHERE name = ?').bind(name).first();
+  if (prev && prev.json && prev.json !== jsonText) {
+    let count = null; try { const v = JSON.parse(prev.json); count = Array.isArray(v) ? v.length : null; } catch (e) {}
+    await env.SPN_DB.batch([
+      env.SPN_DB.prepare('INSERT INTO collection_history (name, json, count, updated_at, by) VALUES (?, ?, ?, ?, ?)').bind(name, prev.json, count, prev.updated_at || Date.now(), by || null),
+      env.SPN_DB.prepare('DELETE FROM collection_history WHERE name = ? AND id NOT IN (SELECT id FROM collection_history WHERE name = ? ORDER BY id DESC LIMIT ?)').bind(name, name, HISTORY_KEEP),
+    ]);
+  }
   await env.SPN_DB.prepare(
-    'INSERT INTO collections (name, json, updated_at) VALUES (?, ?, ?) ON CONFLICT(name) DO UPDATE SET json = excluded.json, updated_at = excluded.updated_at'
-  ).bind(name, jsonText, Date.now()).run();
+    'INSERT INTO collections (name, json, hash, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(name) DO UPDATE SET json = excluded.json, hash = excluded.hash, updated_at = excluded.updated_at'
+  ).bind(name, jsonText, syncHash(jsonText), Date.now()).run();
+}
+/* conditional write: applies only while the stored row still hashes to `base`, keeping the
+   replaced version in the same transaction. Returns false when someone else wrote first,
+   so two devices that both pulled the same state can never both win. */
+async function putCollectionIfBase(env, name, jsonText, base, by) {
+  const cur = await env.SPN_DB.prepare('SELECT json, hash FROM collections WHERE name = ?').bind(name).first();
+  if (!cur) return false;
+  /* rows written before the hash column existed, or by any path that skipped it, get their
+     real hash first, so a matching X-Base-Hash is never refused for a stale stored hash */
+  const realHash = syncHash(cur.json);
+  if (cur.hash !== realHash) { await env.SPN_DB.prepare('UPDATE collections SET hash = ? WHERE name = ? AND json = ?').bind(realHash, name, cur.json).run(); }
+  let prevCount = null; try { const v = JSON.parse(cur.json); prevCount = Array.isArray(v) ? v.length : null; } catch (e) {}
+  const now = Date.now();
+  const res = await env.SPN_DB.batch([
+    env.SPN_DB.prepare('INSERT INTO collection_history (name, json, count, updated_at, by) SELECT name, json, ?, updated_at, ? FROM collections WHERE name = ? AND hash = ? AND json != ?').bind(prevCount, by || null, name, base, jsonText),
+    env.SPN_DB.prepare('UPDATE collections SET json = ?, hash = ?, updated_at = ? WHERE name = ? AND hash = ?').bind(jsonText, syncHash(jsonText), now, name, base),
+    env.SPN_DB.prepare('DELETE FROM collection_history WHERE name = ? AND id NOT IN (SELECT id FROM collection_history WHERE name = ? ORDER BY id DESC LIMIT ?)').bind(name, name, HISTORY_KEEP),
+  ]);
+  return !!(res && res[1] && res[1].meta && res[1].meta.changes === 1);
 }
 
 export default {
   async fetch(req, env) {
+    /* the R2 bucket may be bound under a different name in wrangler.jsonc (the dashboard
+       suggests the bucket name itself); the code reads SPN_FILES throughout */
+    if (!env.SPN_FILES && env.spn_erp_files) env = Object.assign({}, env, { SPN_FILES: env.spn_erp_files });
     const url = new URL(req.url);
     if (!url.pathname.startsWith('/api/')) {
       return env.ASSETS.fetch(req);
@@ -843,18 +886,38 @@ async function handleApi(req, env, url) {
         const name = route.slice('collections/'.length);
         if (!COLLECTIONS.includes(name)) return json({ error: 'Unknown collection' }, 404);
         const text = await req.text();
-        if (text.length > 4000000) return json({ error: 'Collection too large' }, 413);
+        /* D1 caps a row at 2,000,000 bytes (UTF-8); say so plainly rather than failing every retry */
+        const bytes = new TextEncoder().encode(text).length;
+        if (bytes > 1900000) return json({ error: 'This module holds too much data for one record (' + Math.round(bytes / 1048576 * 10) / 10 + ' MB). Archive older entries from Users & Access before more can be saved.', code: 'too-large', bytes }, 413);
         JSON.parse(text);
-        /* optimistic concurrency: the client states which version it is updating;
-           if the stored copy differs, hand it back (409) so the client merges by record */
+        /* optimistic concurrency: the client states which version it is updating; if the
+           stored copy differs the write does not happen and the server copy comes back (409)
+           so the client merges by record. The check and the write are one SQL statement. */
         const base = req.headers.get('X-Base-Hash');
         if (base) {
-          const row = await env.SPN_DB.prepare('SELECT json FROM collections WHERE name = ?').bind(name).first();
-          if (row && row.json && syncHash(row.json) !== base) {
-            return json({ error: 'Collection changed on the server', code: 'conflict', json: row.json, hash: syncHash(row.json) }, 409);
+          /* records present on the server but missing from this write must have been
+             declared as deleted by the client; otherwise the client's copy is older than it
+             thinks (an old app build, a stale device) and it gets the server copy to merge. */
+          if (name !== 'auditLog') {
+            const row = await env.SPN_DB.prepare('SELECT json FROM collections WHERE name = ?').bind(name).first();
+            let stored = null; try { stored = row && JSON.parse(row.json); } catch (e) {}
+            const incoming = JSON.parse(text);
+            if (Array.isArray(stored) && Array.isArray(incoming)) {
+              const declared = new Set(String(req.headers.get('X-Deleted-Ids') || '').split(',').filter(Boolean));
+              const have = new Set(incoming.map(x => x && x.id).filter(x => x != null).map(String));
+              const missing = stored.map(x => x && x.id).filter(x => x != null).map(String).filter(id => !have.has(id) && !declared.has(id));
+              if (missing.length) return json({ error: 'This write would remove ' + missing.length + ' record(s) the app did not delete; merging the server copy first', code: 'undeclared-deletion', missing: missing.slice(0, 50), json: row.json, hash: syncHash(row.json) }, 409);
+            }
           }
+          const written = await putCollectionIfBase(env, name, text, base, session.userId);
+          if (!written) {
+            const row = await env.SPN_DB.prepare('SELECT json FROM collections WHERE name = ?').bind(name).first();
+            if (row && row.json) return json({ error: 'Collection changed on the server', code: 'conflict', json: row.json, hash: syncHash(row.json) }, 409);
+            await putCollection(env, name, text, session.userId); /* no row yet: first write */
+          }
+          return json({ ok: true, hash: syncHash(text) });
         }
-        await putCollection(env, name, text);
+        await putCollection(env, name, text, session.userId);
         return json({ ok: true, hash: syncHash(text) });
       }
 
@@ -950,6 +1013,32 @@ async function handleApi(req, env, url) {
         return json({ ok: true });
       }
 
+      /* version history of one collection: every state a write replaced (last 40) */
+      if (route === 'history' && req.method === 'GET') {
+        if (!isAdmin(session.user)) return json({ error: 'Admin or Super User required' }, 403);
+        const name = url.searchParams.get('name') || '';
+        if (!COLLECTIONS.includes(name)) return json({ error: 'Unknown collection' }, 404);
+        const cur = await env.SPN_DB.prepare('SELECT json, updated_at FROM collections WHERE name = ?').bind(name).first();
+        let curCount = null; try { const v = cur && JSON.parse(cur.json); curCount = Array.isArray(v) ? v.length : null; } catch (e) {}
+        const rows = (await env.SPN_DB.prepare('SELECT id, count, updated_at, by, length(json) AS size FROM collection_history WHERE name = ? ORDER BY id DESC LIMIT ?').bind(name, HISTORY_KEEP).all()).results || [];
+        return json({ name, current: cur ? { count: curCount, updatedAt: cur.updated_at, size: cur.json.length } : null, versions: rows.map(r => ({ id: r.id, count: r.count, updatedAt: r.updated_at, by: r.by, size: r.size })) });
+      }
+      if (route.startsWith('history/') && req.method === 'GET') {
+        if (!isAdmin(session.user)) return json({ error: 'Admin or Super User required' }, 403);
+        const id = +route.slice('history/'.length);
+        const row = await env.SPN_DB.prepare('SELECT name, json, count, updated_at, by FROM collection_history WHERE id = ?').bind(id).first();
+        if (!row) return json({ error: 'Version not found' }, 404);
+        return json({ id, name: row.name, count: row.count, updatedAt: row.updated_at, by: row.by, json: row.json });
+      }
+      if (route.startsWith('history/') && route.endsWith('/restore') && req.method === 'POST') {
+        if (session.user.role !== 'SuperUser') return json({ error: 'Super User required' }, 403);
+        const id = +route.slice('history/'.length, -'/restore'.length);
+        const row = await env.SPN_DB.prepare('SELECT name, json FROM collection_history WHERE id = ?').bind(id).first();
+        if (!row) return json({ error: 'Version not found' }, 404);
+        /* the state being replaced is itself kept, so a restore can be undone */
+        await putCollection(env, row.name, row.json, 'restore:' + session.userId);
+        return json({ ok: true, name: row.name, hash: syncHash(row.json) });
+      }
       if (route === 'backup' && req.method === 'GET') {
         if (session.user.role !== 'SuperUser') return json({ error: 'Super User required' }, 403);
         return json(await buildBackupDump(env));
@@ -1006,7 +1095,7 @@ async function handleApi(req, env, url) {
         }
         for (const name of COLLECTIONS) {
           if (name in body.collections) {
-            stmts.push(env.SPN_DB.prepare('INSERT INTO collections (name, json, updated_at) VALUES (?, ?, ?) ON CONFLICT(name) DO UPDATE SET json = excluded.json, updated_at = excluded.updated_at').bind(name, JSON.stringify(body.collections[name]), now));
+            { const t = JSON.stringify(body.collections[name]); stmts.push(env.SPN_DB.prepare('INSERT INTO collections (name, json, hash, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(name) DO UPDATE SET json = excluded.json, hash = excluded.hash, updated_at = excluded.updated_at').bind(name, t, syncHash(t), now)); }
           }
         }
         await env.SPN_DB.batch(stmts);

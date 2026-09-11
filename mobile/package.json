@@ -1,6 +1,6 @@
 {
   "name": "spn-os-mobile",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "SPN OS - Savannah Propagation Nursery operations app. Capacitor shell that ships the SPN ERP web app inside the APK (offline-first) and talks to the Cloudflare Worker API.",
   "scripts": {

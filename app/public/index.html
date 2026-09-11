@@ -1229,14 +1229,23 @@ function syncHash(s){
   return (h1>>>0).toString(36)+'.'+(h2>>>0).toString(36)+'.'+s.length;
 }
 const snapKey = k => 'spn_snap_'+k;
-function persistSyncBase(){ try{ localStorage.setItem('spn_sync_base', JSON.stringify(SYNC_BASE)); }catch(e){} }
+/* written per key: two tabs (a browser tab and the installed PWA) share this storage
+   but each holds its own in-memory copy, so a whole-object write from a stale tab
+   would roll back the hashes a fresher tab just synced */
+function persistSyncBase(keys){
+  try{
+    let disk = {}; try{ disk = JSON.parse(localStorage.getItem('spn_sync_base')||'{}') || {}; }catch(e){}
+    (keys ? [].concat(keys) : Object.keys(SYNC_BASE)).forEach(k=>{ disk[k] = SYNC_BASE[k]; });
+    localStorage.setItem('spn_sync_base', JSON.stringify(disk));
+  }catch(e){}
+}
 function loadSyncBase(){ try{ const raw = localStorage.getItem('spn_sync_base'); SYNC_BASE = raw ? JSON.parse(raw) : {}; }catch(e){ SYNC_BASE = {}; } }
 async function loadSyncSnapshot(){
   SYNC_SNAPSHOT = {};
   for(const k of COLLECTION_KEYS.concat(['__users'])){ try{ const j = await store.get(snapKey(k)); if(j) SYNC_SNAPSHOT[k] = j; }catch(e){} }
 }
 /* record that the server now holds exactly this JSON for collection k */
-function setSynced(k, j){ SYNC_BASE[k] = syncHash(j); SYNC_SNAPSHOT[k] = j; persistSyncBase(); store.set(snapKey(k), j); }
+function setSynced(k, j){ SYNC_BASE[k] = syncHash(j); SYNC_SNAPSHOT[k] = j; UNSAFE_BASE.delete(k); persistSyncBase(k); store.set(snapKey(k), j); }
 function markSynced(){
   SYNC_BASE = {}; SYNC_SNAPSHOT = {};
   COLLECTION_KEYS.forEach(k=>{ setSynced(k, JSON.stringify(DATA[k])); });
@@ -1247,10 +1256,96 @@ function markSynced(){
 function markAllDirty(){ COLLECTION_KEYS.forEach(k=>{ SYNC_BASE[k] = DIRTY_MARK; }); SYNC_BASE.__users = DIRTY_MARK; persistSyncBase(); }
 function clearLocalSyncState(){
   SYNC_BASE = {}; SYNC_SNAPSHOT = {};
-  try{ localStorage.removeItem('spn_sync_base'); localStorage.removeItem('spn_offline_base'); localStorage.removeItem('spn_weather_cache'); }catch(e){}
+  UNSAFE_BASE.clear();
+  try{ ['spn_sync_base', STORE_BASE_KEY, STORE_DIRTY_KEY, SYNC_DONE_KEY, 'spn_store_at', 'spn_offline_base', 'spn_weather_cache'].forEach(k=>localStorage.removeItem(k)); }catch(e){}
   COLLECTION_KEYS.concat(['__users']).forEach(k=>{ try{ localStorage.removeItem(snapKey(k)); }catch(e){} });
 }
-function parseSnap(k){ try{ return SYNC_SNAPSHOT[k]!=null ? JSON.parse(SYNC_SNAPSHOT[k]) : null; }catch(e){ return null; } }
+/* a snapshot is a valid merge base only when it is the state SYNC_BASE says was synced;
+   a collection whose base could not be trusted merges with no base at all, which can
+   add records but never delete or overwrite anything on the server */
+const UNSAFE_BASE = new Set();
+function parseSnap(k){
+  try{
+    if(SYNC_SNAPSHOT[k]==null || UNSAFE_BASE.has(k)) return null;
+    if(SYNC_BASE[k] && SYNC_BASE[k]!==DIRTY_MARK && syncHash(SYNC_SNAPSHOT[k])!==SYNC_BASE[k]) return null;
+    return JSON.parse(SYNC_SNAPSHOT[k]);
+  }catch(e){ return null; }
+}
+/* The workspace and the sync base it was derived from are always written together.
+   Before this, a pull refreshed the base and snapshots on disk without rewriting the
+   workspace; on the next start the older workspace merged against the newer base, and
+   every record a colleague had added in between read as a local deletion and was
+   pushed to the server as one (the audit log survived because it merges by union). */
+const STORE_BASE_KEY = 'spn_store_base';
+const STORE_DIRTY_KEY = 'spn_store_dirty';  /* collections the persisted workspace holds unsynced */
+const SYNC_DONE_KEY = 'spn_sync_done';      /* cross-tab signal: a sync finished, storage is consistent */
+let STORE_AT = 0;
+async function persistWorkspace(opts){
+  const ok = await store.set(STORE_KEY, JSON.stringify(DATA));
+  /* a failed write (storage quota) must not move the marker: it would describe a
+     workspace that was never written, and the older one on disk would merge wrongly */
+  if(!ok){ console.error('workspace not persisted (storage full?)'); return false; }
+  try{
+    /* an untrusted base stays untrusted across restarts; only a successful sync clears it */
+    const marker = {}; Object.keys(SYNC_BASE).forEach(k=>{ marker[k] = UNSAFE_BASE.has(k) ? 'unsafe' : SYNC_BASE[k]; });
+    localStorage.setItem(STORE_BASE_KEY, JSON.stringify(marker));
+    localStorage.setItem(STORE_DIRTY_KEY, JSON.stringify(dirtyCollections().concat(usersDirty()? ['__users'] : [])));
+    localStorage.setItem('spn_store_at', String(Date.now()));
+    if(opts && opts.synced) localStorage.setItem(SYNC_DONE_KEY, String(Date.now()));
+  }catch(e){}
+  return true;
+}
+/* another tab of this origin persisted work it has not pushed yet: a clean tab must not
+   write its own (older) workspace over it */
+function siblingHoldsUnsynced(){
+  try{ const d = JSON.parse(localStorage.getItem(STORE_DIRTY_KEY)||'[]'); return Array.isArray(d) && d.length>0 && !hasLocalUnsynced(); }catch(e){ return false; }
+}
+/* runs at start, before anything can merge: each collection that looks dirty is
+   classified by the base marker the workspace was written with */
+function bootReconcile(){
+  UNSAFE_BASE.clear();
+  if(!DATA || !Object.keys(SYNC_BASE).length) return;
+  let storeBase = null;
+  try{ const raw = localStorage.getItem(STORE_BASE_KEY); storeBase = raw ? JSON.parse(raw) : null; }catch(e){}
+  try{ STORE_AT = +localStorage.getItem('spn_store_at') || 0; }catch(e){ STORE_AT = 0; }
+  COLLECTION_KEYS.map(k=>[k,k]).concat([['__users','users']]).forEach(([k, prop])=>{
+    const cur = syncHash(JSON.stringify(DATA[prop]));
+    const base = SYNC_BASE[k];
+    if(!base || base===DIRTY_MARK || base===cur) return;
+    if(storeBase && storeBase[k]==='unsafe'){ UNSAFE_BASE.add(k); return; } /* still untrusted from the last run */
+    if(storeBase && storeBase[k]===base) return;                  /* edited against this very base: a normal 3-way merge is right */
+    const snapOk = SYNC_SNAPSHOT[k]!=null && syncHash(SYNC_SNAPSHOT[k])===base;
+    if(storeBase && storeBase[k]===cur && snapOk){                 /* nothing edited locally: the workspace copy is simply older than the last sync */
+      try{ DATA[prop] = JSON.parse(SYNC_SNAPSHOT[k]); return; }catch(e){}
+    }
+    UNSAFE_BASE.add(k);                                            /* older build, or two tabs wrote storage out of step: merge additively */
+  });
+  if(UNSAFE_BASE.size) console.warn('sync: merging without a trusted base for', [...UNSAFE_BASE].join(', '));
+}
+/* another tab of this workspace just synced: take its state when this tab has nothing
+   of its own to push (its own work is pushed first, against its own base) */
+let tabSyncTimer = null;
+window.addEventListener('storage', (ev)=>{
+  /* spn_store_base is the last key a sync writes, so it marks the end of the other
+     tab's burst of per-collection writes; a short debounce covers stragglers */
+  if(!ev || ev.key!==SYNC_DONE_KEY || !DATA) return;
+  clearTimeout(tabSyncTimer);
+  tabSyncTimer = setTimeout(async ()=>{
+    if(SYNCING || document.getElementById('active-modal') || document.querySelector('.drawer')) return;
+    if(hasLocalUnsynced()) return;
+    try{ if(!(await store.get(STORE_KEY))) return; }catch(e){ return; }
+    if(document.getElementById('active-modal') || document.querySelector('.drawer') || hasLocalUnsynced()) return;
+    const prev = { DATA, SYNC_BASE, SYNC_SNAPSHOT, UNSAFE: new Set(UNSAFE_BASE) };
+    await loadData(); loadSyncBase(); await loadSyncSnapshot(); bootReconcile();
+    /* the other tab's storage is mid-write: keep this tab's own consistent state */
+    if(hasLocalUnsynced()){ DATA = prev.DATA; SYNC_BASE = prev.SYNC_BASE; SYNC_SNAPSHOT = prev.SYNC_SNAPSHOT; UNSAFE_BASE.clear(); prev.UNSAFE.forEach(k=>UNSAFE_BASE.add(k)); return; }
+    if(CURRENT){
+      CURRENT = DATA.users.find(u=>u.id===CURRENT.id) || CURRENT;
+      const key = document.getElementById('view-root')?.dataset.view;
+      if(key) nav(key, {keepScroll:true});
+    }
+  }, 400);
+});
 /* collections whose content differs from what the server last confirmed. A device
    that has never synced (fresh browser, standalone mode) has nothing to push. */
 function dirtyCollections(){
@@ -1269,10 +1364,11 @@ function saveData(){
 /* write the whole workspace to the device store, then the changed collections to
    the server; resolves true only when everything the server should have, it has */
 async function flushSave(){
-  let ok = await store.set(STORE_KEY, JSON.stringify(DATA));
+  let ok = await persistWorkspace();
   if(!(SERVER_MODE && API.token) || OFFLINE || SESSION_EXPIRED || SYNCING){ updateOfflineChip(); if(!ok) toast('Could not save - working in-memory only.','err'); return ok; }
   let serverOk = true;
   try{
+    if(pendingPhotoCount()){ try{ await flushPendingPhotos(); }catch(e){ if(isNetworkError(e)) throw e; } }
     const puts = [];
     COLLECTION_KEYS.forEach(k=>{
       const j = JSON.stringify(DATA[k]); const hj = syncHash(j);
@@ -1304,6 +1400,7 @@ async function flushSave(){
       serverOk = false;
       if(failed.some(isNetworkError)) goOffline();
       else if(failed.some(e=>e && e.status===401)) sessionExpired();
+      else if(failed.some(e=>e && e.status===413)){ const e = failed.find(e=>e && e.status===413); console.error('collection too large', e); toast((e && e.message) || 'A module holds too much data to save in one record. Archive older entries.','err'); scheduleRetry(300000); }
       else { console.error('server save failed', failed[0]); toast('Server save failed - keeping the local copy; it will be retried.','err'); scheduleRetry(); }
     }
   }catch(e){ serverOk = false; if(isNetworkError(e)) goOffline(); else console.error('server save failed', e); }
@@ -1313,6 +1410,9 @@ async function flushSave(){
     const key = document.getElementById('view-root')?.dataset.view;
     if(key && CURRENT && !document.getElementById('active-modal') && !document.querySelector('.drawer')) nav(key, {keepScroll:true});
   }
+  /* the pushes moved the base (and a 409 merge may have changed the data): keep the
+     persisted workspace and its base marker in step */
+  ok = (await persistWorkspace({synced: serverOk})) && ok;
   updateOfflineChip();
   if(!ok){ console.error('save failed'); toast('Could not save - working in-memory only.','err'); }
   return ok && serverOk;
@@ -1322,20 +1422,37 @@ async function flushSave(){
    answers 409 with its copy, which is merged per record (mergeOffline) and re-sent.
    Nobody's sale, lead or sowing record is lost to a last-writer-wins overwrite. */
 let MERGED_ON_SAVE = false;
+let PUSH_SEQ = 0; /* bumps on every write the server accepted; a pull issued before a write is stale */
+/* ids this device removed on purpose since its verified base: the server refuses a write
+   that drops any other id, whichever build of the app sent it */
+function declaredDeletions(k){
+  const base = parseSnap(k);
+  if(!Array.isArray(base) || !Array.isArray(DATA[k])) return '';
+  const now = new Set(DATA[k].map(x=>x && x.id).filter(x=>x!=null));
+  const gone = base.map(x=>x && x.id).filter(id=>id!=null && !now.has(id));
+  return gone.map(String).join(',').slice(0, 6000);
+}
 async function putCollectionSync(k){
   let j = JSON.stringify(DATA[k]);
-  let base = (SYNC_BASE[k] && SYNC_BASE[k]!==DIRTY_MARK) ? SYNC_BASE[k] : '';
-  for(let attempt=0; attempt<3; attempt++){
+  /* an untrusted base means this copy may be older than the server: ask for the server
+     copy first (a base that cannot match) and merge additively before writing */
+  let base = UNSAFE_BASE.has(k) ? 'merge-first' : ((SYNC_BASE[k] && SYNC_BASE[k]!==DIRTY_MARK) ? SYNC_BASE[k] : '');
+  for(let attempt=0; attempt<4; attempt++){
     try{
-      await API.req('collections/'+k, {method:'PUT', body:DATA[k], headers: base? {'X-Base-Hash': base} : {}});
-      setSynced(k, j);
+      const headers = base ? {'X-Base-Hash': base} : {};
+      const del = base && base!=='merge-first' ? declaredDeletions(k) : '';
+      if(del) headers['X-Deleted-Ids'] = del;
+      await API.req('collections/'+k, {method:'PUT', body:DATA[k], headers});
+      setSynced(k, j); PUSH_SEQ++;
       return true;
     }catch(e){
       if(e && e.status===409 && e.body && typeof e.body.json==='string'){
         let server = null; try{ server = JSON.parse(e.body.json); }catch(e2){}
         DATA[k] = mergeOffline(k, parseSnap(k), DATA[k], server);
-        SYNC_SNAPSHOT[k] = e.body.json;
-        base = e.body.hash || syncHash(e.body.json);
+        /* the merge was made against this server copy, so it is the base from here on */
+        SYNC_SNAPSHOT[k] = e.body.json; SYNC_BASE[k] = e.body.hash || syncHash(e.body.json); UNSAFE_BASE.delete(k);
+        persistSyncBase(k); store.set(snapKey(k), e.body.json);
+        base = SYNC_BASE[k];
         j = JSON.stringify(DATA[k]);
         MERGED_ON_SAVE = true;
         continue;
@@ -1399,8 +1516,12 @@ function mergeOffline(key, base, local, server){
     const baseMap = new Map((base||[]).map(x=>[recKey(x), JSON.stringify(x)]));
     const localMap = new Map(local.map(x=>[recKey(x), x]));
     const out = new Map(server.map(x=>[recKey(x), x]));
+    /* no trusted base: local records the server lacks are added, nothing is deleted and
+       nothing the server holds is overwritten, since stale and edited cannot be told apart */
+    const bk = key==='users' ? '__users' : key;
+    const additive = base==null && (UNSAFE_BASE.has(bk) || (!!SYNC_BASE[bk] && SYNC_BASE[bk]!==DIRTY_MARK));
     if(base) base.forEach(x=>{ const k = recKey(x); if(!localMap.has(k)) out.delete(k); });
-    local.forEach(x=>{ const k = recKey(x); const b = baseMap.get(k); if(b===undefined || b!==JSON.stringify(x)) out.set(k, x); });
+    local.forEach(x=>{ const k = recKey(x); const b = baseMap.get(k); if(b===undefined || b!==JSON.stringify(x)){ if(!additive || !out.has(k)) out.set(k, x); } });
     const order = [...local.map(recKey), ...server.map(recKey).filter(k=>!localMap.has(k))];
     const seen = new Set();
     return order.filter(k=>{ if(!out.has(k) || seen.has(k)) return false; seen.add(k); return true; }).map(k=>out.get(k));
@@ -1423,7 +1544,14 @@ async function pushLocalChanges(actor){
     if(dirty.length || uDirty){
       const st = await API.req('state');
       const server = (st && st.collections) || {};
-      dirty.forEach(k=>{ DATA[k] = mergeOffline(k, parseSnap(k), DATA[k], server[k]); });
+      const clearedAt = +((server.org && server.org.clearedAt) || 0);
+      dirty.forEach(k=>{
+        /* the workspace on this device was written before the operational data was cleared:
+           its copies are stale by definition, take the server's */
+        if(clearedAt && STORE_AT && STORE_AT < clearedAt && UNSAFE_BASE.has(k) && server[k]!==undefined){ DATA[k] = server[k]; }
+        else DATA[k] = mergeOffline(k, parseSnap(k), DATA[k], server[k]);
+        if(server[k]!==undefined){ const sj = JSON.stringify(server[k]); SYNC_SNAPSHOT[k] = sj; SYNC_BASE[k] = syncHash(sj); UNSAFE_BASE.delete(k); persistSyncBase(k); store.set(snapKey(k), sj); }
+      });
       if(uDirty){
         const me = actor || CURRENT;
         const manager = !!(me && (me.role==='SuperUser' || me.role==='Admin'));
@@ -1474,15 +1602,22 @@ function offlineChipClick(){
 /* offline photo queue: photos taken offline stay inline until they can be uploaded */
 function pendingPhotoCount(){
   if(!DATA || !Array.isArray(DATA.livestockInventory)) return 0;
-  return DATA.livestockInventory.reduce((n,a)=> n + ((a.photos||[]).filter(p=>p.pending && String(p.src||'').startsWith('data:')).length), 0);
+  return DATA.livestockInventory.reduce((n,a)=> n + ((a.photos||[]).filter(p=>p.pending && !p.uploadFailed && String(p.src||'').startsWith('data:')).length), 0);
 }
 async function flushPendingPhotos(){
   if(!SERVER_MODE || !API.token || OFFLINE || !pendingPhotoCount()) return;
   for(const a of (DATA.livestockInventory||[])){
     for(const ph of (a.photos||[])){
-      if(ph.pending && String(ph.src||'').startsWith('data:')){
-        const res = await API.req('files', {method:'POST', body:{mime:'image/jpeg', data:ph.src.split(',')[1]}});
-        ph.src = '/api/files/'+res.id; ph.fileId = res.id; delete ph.pending;
+      if(ph.pending && !ph.uploadFailed && String(ph.src||'').startsWith('data:')){
+        try{
+          const res = await API.req('files', {method:'POST', body:{mime:'image/jpeg', data:ph.src.split(',')[1]}});
+          ph.src = '/api/files/'+res.id; ph.fileId = res.id; delete ph.pending;
+        }catch(e){
+          /* refused for good (too large, bad data): keep it inline and stop retrying, so one
+             photo cannot hold up the whole device's sync */
+          if(e && e.status && e.status!==401 && e.status<500){ ph.uploadFailed = true; ph.uploadError = e.message||('HTTP '+e.status); continue; }
+          throw e;
+        }
       }
     }
   }
@@ -1499,7 +1634,15 @@ async function refreshFromServer(){
   const uidNow = CURRENT.id;
   const snapshot = ()=>JSON.stringify([DATA.users, ...COLLECTION_KEYS.map(k=>DATA[k])]);
   const before = snapshot(), accessBefore = JSON.stringify(CURRENT.access);
-  await loadServerState();
+  const seq = PUSH_SEQ;
+  const st = await API.req('state');
+  /* a dialog opened while the request was out holds a reference into the arrays this
+     would replace; and a write that landed meanwhile makes this response stale */
+  if(document.getElementById('active-modal') || document.querySelector('.drawer') || PUSH_SEQ!==seq){
+    clearTimeout(refreshTimer); refreshTimer = setTimeout(()=>{ refreshFromServer().catch(()=>{}); }, 20000);
+    return;
+  }
+  await applyServerState(st);
   CURRENT = DATA.users.find(u=>u.id===uidNow) || CURRENT;
   if(JSON.stringify(CURRENT.access)!==accessBefore) buildSidebar();
   if(snapshot()!==before){
@@ -1760,6 +1903,33 @@ async function loadServerState(){
   const fresh = emptyWorkspace();
   Object.keys(fresh).forEach(k=>{ if(k!=='users' && (!(k in DATA) || DATA[k]===undefined)) DATA[k]=fresh[k]; });
   markSynced();
+  if(!siblingHoldsUnsynced()) await persistWorkspace({synced:true});
+}
+/* a background pull never replaces the workspace wholesale: a collection edited while
+   the request was in flight is merged (this device's edit kept, everything else taken
+   from the server) and its base set to the server copy, so the next save pushes the
+   merge with a matching X-Base-Hash */
+async function applyServerState(st){
+  const server = st.collections || {};
+  const fresh = emptyWorkspace();
+  COLLECTION_KEYS.forEach(k=>{
+    const sv = Object.prototype.hasOwnProperty.call(server, k) ? stripLegacyDashes(server[k]) : (Array.isArray(fresh[k]) ? [] : fresh[k]);
+    const sj = JSON.stringify(sv);
+    const dirty = !!SYNC_BASE[k] && SYNC_BASE[k]!==syncHash(JSON.stringify(DATA[k]));
+    if(dirty){
+      DATA[k] = mergeOffline(k, parseSnap(k), DATA[k], sv);
+      SYNC_BASE[k] = syncHash(sj); SYNC_SNAPSHOT[k] = sj; UNSAFE_BASE.delete(k); persistSyncBase(k); store.set(snapKey(k), sj);
+    } else { DATA[k] = sv; setSynced(k, sj); }
+  });
+  const su = Array.isArray(st.users) ? st.users : [];
+  const uj = JSON.stringify(su);
+  if(usersDirty()){
+    DATA.users = mergeOffline('users', parseSnap('__users'), DATA.users, su);
+    SYNC_BASE.__users = syncHash(uj); SYNC_SNAPSHOT.__users = uj; UNSAFE_BASE.delete('__users'); persistSyncBase('__users'); store.set(snapKey('__users'), uj);
+  } else { DATA.users = su.length ? su : DATA.users; setSynced('__users', JSON.stringify(DATA.users)); }
+  /* the per-user activity counter is server-merged, never pushed as a collection */
+  if(server.activityStats && typeof server.activityStats==='object') DATA.activityStats = server.activityStats;
+  if(!siblingHoldsUnsynced()) await persistWorkspace({synced:true});
 }
 async function submitLogin(ev){
   if(ev) ev.preventDefault();
@@ -1930,9 +2100,13 @@ function login(userId, resumed, serverAuthorised){
     return;
   }
   /* modules added in newer versions: anyone who records sowing also sees the seed lots */
+  const usersBefore = JSON.stringify(DATA.users);
   CURRENT.access = CURRENT.access || [];
   if(CURRENT.access.includes('sowing') && !CURRENT.access.includes('seedinventory')) CURRENT.access.push('seedinventory');
   if(CURRENT.access.includes('procurement') && !CURRENT.access.includes('suppliers')) CURRENT.access.push('suppliers');
+  /* a derived change, not an edit: it must not leave the users collection "unsynced",
+     which would hold back every background pull on this device */
+  if(SYNC_BASE.__users && SYNC_BASE.__users===syncHash(usersBefore)) setSynced('__users', JSON.stringify(DATA.users));
   document.getElementById('login-screen').style.display='none';
   document.getElementById('app').style.display='block';
   document.getElementById('uc-avatar').innerHTML = avatarInner(CURRENT);
@@ -3094,7 +3268,7 @@ function renderCashSale(root){
         const sub = sd? `≈ ${t? t.toLocaleString()+' tray'+(t===1?'':'s') : '< 1 tray'}` : '';
         return `<span class="mono">${its.length===1? esc(itemQtyLabel(its[0])) : its.length+' lines'}</span>${sub? `<div class="cell-sub">${sub}</div>` : ''}`; }},
       {key:'total', label:'Total', align:'right', val:r=>r.total, html:r=>`<b class="mono">${money(r.total)}</b>`},
-      {key:'vat', label:'VAT', val:r=>r.vat, html:r=>st('green', r.vat.split(' ')[0])},
+      {key:'vat', label:'VAT', val:r=>r.vat||'', html:r=>st('green', String(r.vat||'Exempt').split(' ')[0])},
       {key:'payment', label:'Payment', val:r=>r.payment},
       {key:'servedBy', label:'Served by', val:r=>r.servedBy},
       {key:'agro', label:'Agronomist follow-up', val:r=>r.assignedAgronomist||'', html:r=>r.assignedAgronomist?`${st('gold', r.assignedAgronomist)}${r.customerLat!=null?' <span class="small-muted">📍 located</span>':''}`:'<span class="small-muted">-</span>'},
@@ -3322,12 +3496,12 @@ function openPriceListModal(){
   const rows = priceListSorted();
   openModal('Price list', `
     <p class="small-muted" style="margin:0 0 10px;">${canEdit? 'Products and their standing prices. The POS fills unit and price when a product is picked on a sale line.' : 'Reference prices set by the Admin/MD. The POS fills unit and price when a product is picked.'}</p>
-    <div class="table-scroll" style="max-height:330px;"><table><thead><tr><th>Product</th><th>Unit</th><th style="text-align:right;">Tray size</th><th style="text-align:right;">Price (KES)</th>${canEdit?'<th></th>':''}</tr></thead><tbody id="pl-rows">
+    ${trayTypeDatalist()}<div class="table-scroll" style="max-height:330px;"><table><thead><tr><th>Product</th><th>Unit</th><th style="text-align:right;">Tray size</th><th style="text-align:right;">Price (KES)</th>${canEdit?'<th></th>':''}</tr></thead><tbody id="pl-rows">
       ${rows.length? rows.map(p=>canEdit? `
         <tr data-id="${esc(p.id)}">
           <td><input value="${esc(p.name)}" data-f="name" style="min-width:150px;"></td>
           <td><select data-f="unit">${SALE_UNITS.map(u=>`<option ${p.unit===u?'selected':''}>${u}</option>`).join('')}</select></td>
-          <td><input type="number" data-f="traySize" value="${p.traySize||''}" placeholder="-" min="1" style="width:72px;text-align:right;"></td>
+          <td><input type="number" data-f="traySize" list="tray-type-list" value="${p.traySize||''}" placeholder="-" min="1" style="width:72px;text-align:right;"></td>
           <td><input type="number" data-f="price" value="${p.price}" min="0" step="any" style="width:92px;text-align:right;"></td>
           <td><button type="button" class="btn sm ghost" title="Remove" onclick="this.closest('tr').remove()">×</button></td>
         </tr>` : `
@@ -3344,9 +3518,9 @@ function addPriceListRow(){
   const tb = document.getElementById('pl-rows'); if(!tb) return;
   const empty = tb.querySelector('td[colspan]'); if(empty) empty.parentElement.remove();
   const tr = document.createElement('tr'); tr.dataset.id = '';
-  tr.innerHTML = `<td><input data-f="name" placeholder="e.g. Tomato seedlings (tray of 66)" style="min-width:150px;"></td>
+  tr.innerHTML = `<td><input data-f="name" placeholder="e.g. Tomato seedlings (tray of ${defaultTrayCells()})" style="min-width:150px;"></td>
     <td><select data-f="unit">${SALE_UNITS.map(u=>`<option>${u}</option>`).join('')}</select></td>
-    <td><input type="number" data-f="traySize" placeholder="-" min="1" style="width:72px;text-align:right;"></td>
+    <td><input type="number" data-f="traySize" list="tray-type-list" placeholder="${defaultTrayCells()}" min="1" style="width:72px;text-align:right;"></td>
     <td><input type="number" data-f="price" min="0" step="any" style="width:92px;text-align:right;"></td>
     <td><button type="button" class="btn sm ghost" title="Remove" onclick="this.closest('tr').remove()">×</button></td>`;
   tb.appendChild(tr);
@@ -3376,7 +3550,7 @@ function saleItems(s){
   /* single-line records from before multi-item sales: a legacy tray line holds a tray
      count in qty, so its seedling equivalent has to be derived, not copied */
   const unit = s.unit||'seedlings';
-  const traySize = +s.traySize>0 ? +s.traySize : (unit==='trays' ? (traySizeFromPriceList(s.crop) || DEFAULT_TRAY_SIZE) : null);
+  const traySize = +s.traySize>0 ? +s.traySize : (unit==='trays' ? (traySizeFromPriceList(s.crop) || defaultTrayCells()) : null);
   const qty = +s.qty||0;
   const seedlings = unit==='trays' ? qty*(traySize||0) : (unit==='seedlings' ? qty : 0);
   return [{crop:s.crop, qty, unit, traySize, seedlings, unitPrice:+s.unitPrice||0, total:+s.total||0, batchId:s.batchId||null, batchCode:s.batchCode||null}];
@@ -3387,7 +3561,18 @@ function itemQtyLabel(it){
   return `${(+it.qty||0).toLocaleString()} ${it.unit||'seedlings'}`;
 }
 function saleSummary(s){ const its = saleItems(s); return its.length===1? its[0].crop : `${its[0].crop} + ${its.length-1} more`; }
-const DEFAULT_TRAY_SIZE = 66; /* standard SPN propagation tray; per-crop sizes in the price list override it */
+const DEFAULT_TRAY_SIZE = 200; /* SPN standard tray: 200 cells. The Super User can register other tray types
+   and pick the default in Users & Access; a tray product priced in the POS price list overrides it per crop */
+/* tray types live on the organisation profile (a synced collection) so every device
+   converts with the same cell counts; an empty list falls back to the 200-cell tray */
+function trayTypes(){
+  const o = orgProfile();
+  const list = (Array.isArray(o.trayTypes) ? o.trayTypes : []).filter(t=>t && +t.cells>0);
+  return list.length ? list : [{id:'tt_default', name:'Standard tray', cells:DEFAULT_TRAY_SIZE}];
+}
+function defaultTrayType(){ const list = trayTypes(); return list.find(t=>t.id===orgProfile().defaultTray) || list[0]; }
+function defaultTrayCells(){ return +defaultTrayType().cells || DEFAULT_TRAY_SIZE; }
+function trayTypeDatalist(){ return `<datalist id="tray-type-list">${trayTypes().map(t=>`<option value="${+t.cells}">${esc(t.name)}</option>`).join('')}</datalist>`; }
 function saleTraysTotal(s){ return saleItems(s).reduce((a,it)=> a + (it.unit==='trays'? (+it.qty||0) : 0), 0); }
 /* price list only. saleItems() needs a tray size to read legacy records, and the full
    lookup below walks the sales it would be building, so that path must not go near it */
@@ -3419,9 +3604,9 @@ function traySizeFor(crop){
   return null;
 }
 /* tray size to display with: the priced/last-sold size for the crop where the workspace
-   has one, else the standard 66-cell tray, so a tray figure is never silently
+   has one, else the default tray type, so a tray figure is never silently
    downgraded to a seedling count */
-function traySizeOf(crop){ return traySizeFor(crop) || DEFAULT_TRAY_SIZE; }
+function traySizeOf(crop){ return traySizeFor(crop) || defaultTrayCells(); }
 /* stock on hand floors: a part tray is not a sellable tray */
 function trayCountOf(crop, seedlings){ return Math.floor((+seedlings||0)/traySizeOf(crop)); }
 /* seedlings already sold round instead: a customer who took most of a tray took a tray */
@@ -3450,10 +3635,10 @@ function salesTrays(sales){
 }
 function saleTrayEqTotal(s){ return salesTrays([s]); }
 function anyTraySizePriced(){ return (DATA.priceList||[]).some(p=>p.unit==='trays' && +p.traySize>0); }
-/* shown wherever tray figures rest on the 66-cell assumption rather than a priced tray */
-function trayBasisNote(){ return anyTraySizePriced()
-  ? 'Tray sizes come from the POS price list where a tray product is priced for that crop; every other crop is counted in '+DEFAULT_TRAY_SIZE+'-cell trays.'
-  : 'Tray counts assume '+DEFAULT_TRAY_SIZE+'-cell trays; price a tray product in the POS price list to use your own tray size.'; }
+/* shown wherever tray figures rest on the default tray type rather than a priced tray */
+function trayBasisNote(){ const d = defaultTrayType(); return anyTraySizePriced()
+  ? 'Tray sizes come from the POS price list where a tray product is priced for that crop; every other crop is counted in '+d.cells+'-cell trays ('+d.name+', the default tray type).'
+  : 'Tray counts use the default tray type, '+d.name+' ('+d.cells+' cells). A tray product priced in the POS price list overrides it for that crop; the Super User sets tray types in Users & Access.'; }
 function traysOfLabel(crop, seedlings){
   const n = +seedlings||0, t = trayCountOf(crop, n);
   /* a part tray still has to be visible, or small holdings read as zero stock */
@@ -3465,7 +3650,7 @@ let SALE_DRAFT = [];
 function newSaleRow(batchId){
   const r = batchId ? DATA.sowingRecords.find(x=>x.id===batchId) : null;
   const pl = r ? findPriceItem(r.crop) : null;
-  return { product: r? `${r.crop} ${r.variety} · ${r.batchCode}` : '', batchId: r? r.id : null, unit: (pl&&pl.unit)||'seedlings', traySize: (pl&&pl.traySize)||66, qty: r? 100 : 1, unitPrice: pl? pl.price : 0 };
+  return { product: r? `${r.crop} ${r.variety} · ${r.batchCode}` : '', batchId: r? r.id : null, unit: (pl&&pl.unit)||'seedlings', traySize: (pl&&pl.traySize)||defaultTrayCells(), qty: r? 100 : 1, unitPrice: pl? pl.price : 0 };
 }
 function saleRowSeedlings(row){ return row.unit==='trays'? (+row.qty||0)*(+row.traySize||0) : (+row.qty||0); }
 function saleDraftTotal(){ return SALE_DRAFT.reduce((a,r)=>a+Math.round((+r.qty||0)*(+r.unitPrice||0)),0); }
@@ -3473,7 +3658,7 @@ function renderSaleItems(){
   const host = document.getElementById('sale-items'); if(!host) return;
   const batches = readyBatches();
   host.innerHTML = `
-    <datalist id="sale-prod-list">${batches.map(r=>`<option value="${esc(`${r.crop} ${r.variety} · ${r.batchCode}`)}">`).join('')}${priceListSorted().map(p=>`<option value="${esc(p.name)}">`).join('')}</datalist>
+    ${trayTypeDatalist()}<datalist id="sale-prod-list">${batches.map(r=>`<option value="${esc(`${r.crop} ${r.variety} · ${r.batchCode}`)}">`).join('')}${priceListSorted().map(p=>`<option value="${esc(p.name)}">`).join('')}</datalist>
     <div class="table-scroll"><table><thead><tr><th style="min-width:190px;">Item (product, batch or free text)</th><th>Unit</th><th style="width:80px;">Qty</th><th style="width:80px;">Tray size</th><th style="width:96px;">Unit price</th><th style="text-align:right;">Line total</th><th></th></tr></thead><tbody>
       ${SALE_DRAFT.map((row,i)=>{
         const batch = row.batchId? DATA.sowingRecords.find(x=>x.id===row.batchId) : null;
@@ -3481,7 +3666,7 @@ function renderSaleItems(){
           <td><input list="sale-prod-list" value="${esc(row.product)}" oninput="updSaleRow(${i},'product',this.value)" placeholder="Type or pick">${batch? (()=>{ const left=batchRemaining(batch); return `<div class="cell-sub">${traysOfLabel(batch.crop, left)} · ${left.toLocaleString()} seedlings left in ${esc(batch.batchCode)}</div>`; })() : ''}</td>
           <td><select onchange="updSaleRow(${i},'unit',this.value)">${SALE_UNITS.map(u=>`<option ${row.unit===u?'selected':''}>${u}</option>`).join('')}</select></td>
           <td><input type="number" min="0" step="any" value="${row.qty}" oninput="updSaleRow(${i},'qty',this.value)"></td>
-          <td>${row.unit==='trays'? `<input type="number" min="1" value="${row.traySize||''}" title="Seedlings per tray" oninput="updSaleRow(${i},'traySize',this.value)">` : '<span class="small-muted">-</span>'}</td>
+          <td>${row.unit==='trays'? `<input type="number" min="1" list="tray-type-list" value="${row.traySize||''}" title="Seedlings per tray (pick a registered tray type or type a count)" oninput="updSaleRow(${i},'traySize',this.value)">` : '<span class="small-muted">-</span>'}</td>
           <td><input type="number" min="0" step="any" value="${row.unitPrice}" oninput="updSaleRow(${i},'unitPrice',this.value)"></td>
           <td class="mono" style="text-align:right;white-space:nowrap;">${money(Math.round((+row.qty||0)*(+row.unitPrice||0)))}</td>
           <td>${SALE_DRAFT.length>1? `<button type="button" class="btn sm ghost" title="Remove line" onclick="rmSaleRow(${i})">×</button>`:''}</td>
@@ -4218,7 +4403,7 @@ function toggleSalesCrop(crop, checked){
    recognised from the common-crop list, sowing records and seed lots */
 function canonicalCrop(line){
   const t = String(line||'').toLowerCase();
-  /* price-list names like "Pawpaw seedlings (tray of 66)" contribute their base
+  /* price-list names like "Pawpaw seedlings (tray of 200)" contribute their base
      crop word(s), so anything sold through the POS gets its own line */
   const plBases = (DATA.priceList||[]).map(p=>String(p.name||'')
     .replace(/\([^)]*\)/g,' ').replace(/\b(seedlings?|trays?|tray)\b/gi,' ')
@@ -7647,8 +7832,10 @@ function renderAccess(root){
         ['Company KRA PIN', DATA.companyKraPin? `<span class="mono">${esc(DATA.companyKraPin)}</span>` : 'Not set'],
         ['Storage', SERVER_MODE? st('green','Cloudflare D1 database') : st('slate','Standalone · browser storage')],
         ['Sign-in', SERVER_MODE? 'Per-user passwords · 7 day sessions' : 'Shared demo password'],
+        ['Default tray', `${esc(defaultTrayType().name)} · <b class="mono">${defaultTrayCells()}</b> cells${trayTypes().length>1? ` <span class="small-muted">(${trayTypes().length} tray types)</span>` : ''}`],
       ])}
       <button class="btn sm secondary" style="margin-top:12px;" onclick="openOrgSettings()">Edit organisation & region</button>
+      ${isSuper()? `<button class="btn sm secondary" style="margin-top:12px;margin-left:6px;" onclick="openTrayTypesModal()">Tray types</button>` : ''}
       <div class="small-muted" style="margin-top:8px;">The organisation name and region appear in the sidebar, on receipts and on every exported document.</div>
     </div>
     <div class="card" id="releases-card">
@@ -7665,6 +7852,15 @@ function renderAccess(root){
         <label class="btn sm secondary" style="cursor:pointer;">Restore from backup…<input type="file" accept=".json,application/json" style="display:none" onchange="restoreBackupFile(this.files[0]); this.value='';"></label>
       </div>
     </div>
+    ${SERVER_MODE? `<div class="card">
+      <div class="card-title">Version history · Super User only</div>
+      <div class="small-muted" style="margin-bottom:10px;">The server keeps the last ${HISTORY_VERSIONS} states of every module's data, one per change. If records ever go missing, pick the module, find the version that still has them and restore it; the state you replace is kept too, so a restore can be undone.</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+        <select id="vh-name" style="max-width:240px;">${HISTORY_COLLECTIONS.map(([k,l])=>`<option value="${k}">${l}</option>`).join('')}</select>
+        <button class="btn sm leaf" onclick="loadCollectionHistory()">Show versions</button>
+      </div>
+      <div id="vh-list" class="small-muted" style="margin-top:10px;"></div>
+    </div>` : ''}
     <div class="card" style="border-color:var(--danger);">
       <div class="card-title" style="color:var(--danger);">Danger zone · Super User only</div>
       <div style="font-size:12.4px;line-height:1.6;margin-bottom:12px;">Clear the mock or current operational data for a fresh, production-ready environment. User accounts, departments, organisation settings and the weather area are kept.</div>
@@ -7913,7 +8109,7 @@ function openOrgSettings(){
       const name = document.getElementById('org-name').value.trim();
       const region = document.getElementById('org-region').value.trim();
       if(!name || !region){ toast('Organisation name and region are required.','err'); return; }
-      DATA.org = {name, region};
+      DATA.org = Object.assign({}, orgProfile(), {name, region});
       DATA.companyKraPin = document.getElementById('org-kra').value.trim();
       logActivity(`${CURRENT.name} updated the organisation profile (${name}, ${region}).`);
       saveData(); buildSidebar(); closeModal();
@@ -7922,6 +8118,54 @@ function openOrgSettings(){
     }}
   ]);
 }
+/* Tray types: the cell counts every seedling-to-tray figure converts with. Kept on the
+   organisation profile so the whole workspace, web and phone, uses the same defaults. */
+function openTrayTypesModal(){
+  if(!isSuper()){ toast('Only the Super User can change tray types.','err'); return; }
+  const def = defaultTrayType();
+  openModal('Tray types', `
+    <p class="small-muted" style="margin:0 0 10px;line-height:1.55;">Every tray figure in the app converts seedlings at the default tray's cell count, unless a tray product for that crop is priced in the POS price list. Register the trays you actually use (cells, holes or plugs per tray) and pick the default.</p>
+    <div class="table-scroll"><table><thead><tr><th>Tray type</th><th style="text-align:right;">Cells per tray</th><th style="text-align:center;">Default</th><th></th></tr></thead><tbody id="tt-rows">
+      ${trayTypes().map(t=>`<tr data-id="${esc(t.id)}">${trayTypeCells(t, t.id===def.id)}</tr>`).join('')}
+    </tbody></table></div>
+    <button type="button" class="btn sm secondary" style="margin-top:10px;" onclick="addTrayTypeRow()">+ Add tray type</button>
+  `, [
+    {label:'Cancel', cls:'secondary', action:closeModal},
+    {label:'Save tray types', cls:'leaf', action:saveTrayTypes},
+  ]);
+}
+function trayTypeCells(t, isDefault){
+  return `<td><input data-f="name" value="${esc(t.name||'')}" placeholder="e.g. 200-cell propagation tray" style="min-width:170px;"></td>
+    <td><input type="number" data-f="cells" min="1" step="1" value="${+t.cells||''}" placeholder="200" style="width:90px;text-align:right;"></td>
+    <td style="text-align:center;"><input type="radio" name="tt-default" ${isDefault?'checked':''} title="Use as the default tray"></td>
+    <td><button type="button" class="btn sm ghost" title="Remove" onclick="this.closest('tr').remove()">×</button></td>`;
+}
+function addTrayTypeRow(){
+  const tb = document.getElementById('tt-rows'); if(!tb) return;
+  const tr = document.createElement('tr'); tr.dataset.id = uid('tt');
+  tr.innerHTML = trayTypeCells({id:tr.dataset.id, name:'', cells:''}, false);
+  tb.appendChild(tr); tr.querySelector('input').focus();
+}
+function saveTrayTypes(){
+  const list = []; let def = null;
+  for(const tr of document.querySelectorAll('#tt-rows tr')){
+    const name = tr.querySelector('[data-f="name"]').value.trim();
+    const cells = Math.round(+tr.querySelector('[data-f="cells"]').value);
+    if(!name && !cells) continue;
+    if(!name || !(cells>0)){ toast('Each tray type needs a name and a cell count.','err'); return; }
+    const id = tr.dataset.id || uid('tt');
+    list.push({id, name, cells});
+    if(tr.querySelector('input[type="radio"]').checked) def = id;
+  }
+  if(!list.length){ toast('Keep at least one tray type.','err'); return; }
+  if(!def) def = list[0].id;
+  DATA.org = Object.assign({}, orgProfile(), {trayTypes:list, defaultTray:def});
+  const d = list.find(t=>t.id===def);
+  logActivity(`${CURRENT.name} updated tray types (default: ${d.name}, ${d.cells} cells; ${list.length} type${list.length===1?'':'s'}).`);
+  saveData(); closeModal();
+  renderAccess(document.getElementById('view-root'));
+  toast('Tray types saved. Tray figures now convert at '+d.cells+' seedlings per tray by default.');
+}
 function clearOperationalData(){
   const keep = {
     users: DATA.users, departments: DATA.departments, weatherLocation: DATA.weatherLocation,
@@ -7929,6 +8173,9 @@ function clearOperationalData(){
     org: DATA.org, reportsAccessList: DATA.reportsAccessList,
   };
   DATA = Object.assign(emptyWorkspace(), keep);
+  /* a device whose workspace predates this moment must not re-add its records on its next
+     merge (org is synced, so every device learns the timestamp) */
+  DATA.org = Object.assign({}, orgProfile(), {clearedAt: Date.now()});
   DATA.auditLog = [{ts:Date.now(), user:CURRENT.name, action:'Cleared all operational data for a fresh production environment.'}];
   markAllDirty(); /* every collection re-syncs its cleared state, also after an offline clear */
   saveData();
@@ -8698,6 +8945,44 @@ async function flushPendingProfile(){
 
 /* ================= BACKUP & RESTORE (Super User) ================= */
 function buildBackup(){ const collections = {}; COLLECTION_KEYS.forEach(k=>{ collections[k] = DATA[k]; }); return {kind:'spn-erp-backup', version:2, exportedAt:new Date().toISOString(), org:orgProfile().name, users:DATA.users, collections}; }
+/* ---- version history: every collection state the server replaced ---- */
+const HISTORY_VERSIONS = 40;
+const HISTORY_COLLECTIONS = [['cashSales','Cash sales'],['staff','Staff'],['sowingRecords','Sowing records'],['seedInventory','Seeds inventory'],['leads','Leads & orders'],['procurement','Procurement'],['requisitions','Requisitions'],['consumables','Consumables'],['suppliers','Suppliers'],['priceList','Price list'],['livestockInventory','Livestock'],['farmPlots','Farm plots'],['rainfallLog','Rainfall log'],['aiScans','AI scans'],['departments','Departments'],['accessRequests','Access requests'],['auditLog','Audit log']];
+function historyUserName(by){
+  if(!by) return 'unknown';
+  const restore = /^restore:(.+)$/.exec(by);
+  const id = restore ? restore[1] : by;
+  const u = DATA.users.find(x=>x.id===id);
+  return (restore? 'restore by ' : '') + (u ? u.name : id);
+}
+async function loadCollectionHistory(){
+  const name = document.getElementById('vh-name').value, box = document.getElementById('vh-list');
+  if(!box) return;
+  box.innerHTML = '<span class="spinner"></span> Loading versions…';
+  try{
+    const res = await API.req('history?name='+encodeURIComponent(name));
+    const label = (HISTORY_COLLECTIONS.find(([k])=>k===name)||[])[1] || name;
+    const cur = res.current ? `<div style="margin-bottom:8px;">Now on the server: <b>${res.current.count!=null? res.current.count.toLocaleString()+' record'+(res.current.count===1?'':'s') : Math.round(res.current.size/1024)+' KB'}</b> · updated ${fmtDT(res.current.updatedAt)}</div>` : '';
+    if(!res.versions.length){ box.innerHTML = cur + `No earlier versions of ${esc(label)} yet: versions appear from the next change onward.`; return; }
+    box.innerHTML = cur + `<div class="table-scroll"><table><thead><tr><th>Replaced on</th><th>By</th><th style="text-align:right;">Records</th><th style="text-align:right;">Size</th><th></th></tr></thead><tbody>
+      ${res.versions.map(v=>`<tr><td>${fmtDT(v.updatedAt)}</td><td>${esc(historyUserName(v.by))}</td><td class="mono" style="text-align:right;">${v.count!=null? v.count.toLocaleString() : '-'}</td><td class="mono" style="text-align:right;">${Math.max(1, Math.round(v.size/1024))} KB</td><td>${isSuper()? `<button class="btn sm secondary" onclick="restoreCollectionVersion('${esc(name)}', ${v.id}, ${v.count==null? 'null' : v.count})">Restore</button>` : ''}</td></tr>`).join('')}
+    </tbody></table></div>
+    <div style="margin-top:6px;">"Records" is the number of entries that version holds; the version that was on the server before a loss is the one with the higher count.</div>`;
+  }catch(e){ box.innerHTML = 'Could not load versions: '+esc(e.message||'error'); }
+}
+async function restoreCollectionVersion(name, id, count){
+  if(!isSuper()){ toast('Only the Super User can restore a version.','err'); return; }
+  const label = (HISTORY_COLLECTIONS.find(([k])=>k===name)||[])[1] || name;
+  if(!confirm(`Restore ${label} to this version${count!=null? ' ('+count+' records)' : ''}? Every device will pick it up on its next sync. The current state is kept as a version, so this can be undone.`)) return;
+  try{
+    await API.req('history/'+id+'/restore', {method:'POST'});
+    /* take the restored state now, merging anything this device had not pushed yet */
+    await applyServerState(await API.req('state'));
+    logActivity(`${CURRENT.name} restored ${label} to an earlier version${count!=null? ' ('+count+' records)' : ''}.`);
+    toast(label+' restored.');
+    loadCollectionHistory();
+  }catch(e){ toast('Restore failed: '+(e.message||'error'),'err'); }
+}
 async function downloadBackup(){
   if(!isSuper()) return;
   let dump = buildBackup();
@@ -8841,6 +9126,7 @@ async function deleteRelease(id){
   await loadData();
   loadSyncBase();
   await loadSyncSnapshot();
+  bootReconcile();
   PENDING_LOCAL = hasLocalUnsynced();
   await detectServer();
   if(SERVER_MODE && OFFLINE){ await bootOffline(); return; }
@@ -8849,9 +9135,12 @@ async function deleteRelease(id){
       const d = await API.req('directory');
       SERVER_SETUP = !!(d && d.setup);
       if(d && d.users && d.users.length) LOGIN_DIRECTORY = d.users;
-      if(d && d.org) DATA.org = d.org;
+      /* only where this device holds nothing unsynced: an offline change to tray types or
+         departments is pushed first, not overwritten by the login-screen copy */
+      const clean = k => !SYNC_BASE[k] || SYNC_BASE[k]===syncHash(JSON.stringify(DATA[k]));
+      if(d && d.org && clean('org')) DATA.org = d.org;
       /* live department list for the registration form */
-      if(d && Array.isArray(d.departments) && d.departments.length) DATA.departments = d.departments;
+      if(d && Array.isArray(d.departments) && d.departments.length && clean('departments')) DATA.departments = d.departments;
     }catch(e){}
     /* invitation link: /?invite=TOKEN opens the registration form pre-approved */
     try{
