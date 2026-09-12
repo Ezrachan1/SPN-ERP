@@ -7852,6 +7852,7 @@ function renderAccess(root){
       ])}
       <button class="btn sm secondary" style="margin-top:12px;" onclick="openOrgSettings()">Edit organisation & region</button>
       ${isSuper()? `<button class="btn sm secondary" style="margin-top:12px;margin-left:6px;" onclick="openTrayTypesModal()">Tray types</button>` : ''}
+      ${isSuper()? (()=>{ const n = oddTrayLines().length; return `<button class="btn sm ${n? 'leaf' : 'secondary'}" style="margin-top:12px;margin-left:6px;" onclick="openRecomputeTraysModal()">Past tray receipts${n? ' · '+n+' to fix' : ''}</button>`; })() : ''}
       <div class="small-muted" style="margin-top:8px;">The organisation name and region appear in the sidebar, on receipts and on every exported document.</div>
     </div>
     <div class="card" id="releases-card">
@@ -8181,6 +8182,59 @@ function saveTrayTypes(){
   saveData(); closeModal();
   renderAccess(document.getElementById('view-root'));
   toast('Tray types saved. Tray figures now convert at '+d.cells+' seedlings per tray by default.');
+}
+/* ---- past tray receipts: lines recorded with a tray size that is not a registered tray
+   type (and not the priced size for that product). Their seedling equivalents, and the
+   stock drawn from their batches, were computed at that size. Money is never touched. ---- */
+function oddTrayLines(){
+  const registered = new Set(trayTypes().map(t=>+t.cells));
+  const out = [];
+  (DATA.cashSales||[]).forEach(s=>{
+    const legacy = !(Array.isArray(s.items) && s.items.length);
+    saleItems(s).forEach((it, idx)=>{
+      if(it.unit!=='trays') return;
+      const size = +it.traySize>0 ? +it.traySize : null;
+      const priced = traySizeFromPriceList(it.crop);
+      if(size && (registered.has(size) || size===priced)) return;
+      out.push({ sale:s, idx, legacy, crop:it.crop, qty:+it.qty||0, size, seedlings:itemSeedlings(it), priced, batchId:it.batchId||null });
+    });
+  });
+  return out;
+}
+function openRecomputeTraysModal(){
+  if(!isSuper()){ toast('Only the Super User can correct past receipts.','err'); return; }
+  const lines = oddTrayLines();
+  const types = trayTypes(), def = defaultTrayType();
+  const target = l => l.priced || +(document.getElementById('rt-target')?.value || def.cells);
+  const rowsHTML = () => lines.map(l=>{ const t = target(l); return `<tr><td class="mono">${esc(l.sale.receiptNo||'')}<div class="cell-sub">${fmtDate(l.sale.date)} · ${esc(l.sale.customer||'')}</div></td><td>${esc(l.crop)}${l.batchId? '' : '<div class="cell-sub">not linked to a batch</div>'}</td><td class="mono" style="text-align:right;">${l.qty}</td><td class="mono" style="text-align:right;">${l.size||'-'} → <b>${t}</b>${l.priced? '<div class="cell-sub">priced size</div>' : ''}</td><td class="mono" style="text-align:right;">${l.seedlings.toLocaleString()} → <b>${(l.qty*t).toLocaleString()}</b></td></tr>`; }).join('');
+  openModal('Past tray receipts', `
+    <p class="small-muted" style="margin:0 0 10px;line-height:1.55;">${lines.length? `${lines.length} tray line${lines.length===1?'':'s'} on past receipts carry a tray size that is not a registered tray type. Their seedling equivalents, and the stock drawn down from their batches, were counted at that size. Recomputing sets each line to the crop's priced tray size where one exists, otherwise to the tray type chosen below. Prices and receipt totals do not change'+(SERVER_MODE? ', and the previous state stays in Version history.' : '. This workspace has no version history, so download a backup first if you may need the old figures.')+'` : 'Every tray line on past receipts already uses a registered tray type or a priced size. Nothing to recompute.'}</p>
+    ${lines.length? `
+    <div class="field" style="margin-bottom:10px;max-width:320px;"><label>Recompute unpriced lines at</label><select id="rt-target" onchange="document.getElementById('rt-rows').innerHTML = window.__rtRows()">${types.map(t=>`<option value="${+t.cells}" ${t.id===def.id?'selected':''}>${esc(t.name)} · ${+t.cells} cells</option>`).join('')}</select></div>
+    <div class="table-scroll" style="max-height:320px;"><table><thead><tr><th>Receipt</th><th>Item</th><th style="text-align:right;">Trays</th><th style="text-align:right;">Tray size</th><th style="text-align:right;">Seedlings</th></tr></thead><tbody id="rt-rows">${rowsHTML()}</tbody></table></div>` : ''}
+  `, [
+    {label: lines.length? 'Cancel' : 'Close', cls:'secondary', action:closeModal},
+    ...(lines.length? [{label:'Recompute '+lines.length+' line'+(lines.length===1?'':'s'), cls:'leaf', action:()=>applyRecomputeTrays(lines, target)}] : []),
+  ]);
+  window.__rtRows = rowsHTML;
+}
+function applyRecomputeTrays(lines, target){
+  if(!confirm('Recompute the seedling equivalents on '+lines.length+' past tray line'+(lines.length===1?'':'s')+'? Stock figures for their batches will change; prices and totals will not.')) return;
+  let batches = new Set();
+  lines.forEach(l=>{
+    const t = target(l);
+    if(l.legacy){ l.sale.traySize = t; }
+    else { const it = l.sale.items[l.idx]; it.traySize = t; it.seedlings = l.qty * t; }
+    /* a multi-item receipt keeps its seedling total in qty; on a legacy single-line receipt
+       qty IS the tray count and must stay as it is */
+    if(!l.legacy) l.sale.qty = saleItems(l.sale).reduce((a,it)=>a+itemSeedlings(it),0);
+    if(l.batchId) batches.add(l.batchId);
+  });
+  const detail = lines.map(l=>`${l.sale.receiptNo||'?'} ${l.crop} ${l.size||'-'}→${target(l)}`).slice(0,12).join('; ') + (lines.length>12? '; …' : '');
+  logActivity(`${CURRENT.name} recomputed tray sizes on ${lines.length} past receipt line${lines.length===1?'':'s'} (${batches.size} batch${batches.size===1?'':'es'} affected): ${detail}`);
+  saveData(); closeModal();
+  renderAccess(document.getElementById('view-root'));
+  toast('Past tray receipts recomputed. Stock figures now reflect the registered tray sizes.');
 }
 function clearOperationalData(){
   const keep = {
