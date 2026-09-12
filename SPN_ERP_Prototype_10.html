@@ -2756,7 +2756,7 @@ function renderDashboard(root){
   });
   const stageIcons = ['stageSeed','stageSprout','stageGrow','stageReady'];
   /* batches that are closed or fully sold have nothing to show as ready stock */
-  const readiness = stockRows.filter(x=>x.viableQty>0).sort((a,b)=>b.c.pct-a.c.pct);
+  const readiness = stockRows.filter(x=>x.viableQty>0).sort((a,b)=>(b.c.pct-a.c.pct) || (b.c.daysElapsed-a.c.daysElapsed) || (b.viableQty-a.viableQty));
   const alerts = alertItems();
   const firstName = CURRENT.name.split(' ')[0];
 
@@ -2780,7 +2780,7 @@ function renderDashboard(root){
       <div class="kpi-row"><div class="kpi-icon">${ICONS.stock}</div>${st('green','Ready')}</div>
       <div class="k-label">Trays Ready for Sale</div>
       <div class="k-value">${readyTrays? '≈ '+readyTrays.toLocaleString() : (readySeedlings? '< 1' : '0')}</div>
-      <div class="k-sub">${readyRows.length} batch${readyRows.length===1?'':'es'} at Ready for Sale · ${readySeedlings.toLocaleString()} seedlings${growingSeedlings>0? ' · '+(growingTrays? growingTrays.toLocaleString()+' tray'+(growingTrays===1?'':'s') : '< 1 tray')+' still growing, not counted here' : ''}</div>
+      <div class="k-sub">${readyRows.length} batch${readyRows.length===1?'':'es'} at Ready for Sale · ${readySeedlings.toLocaleString()} seedlings${readyTrays !== readyRows.reduce((a,x)=>a+trayCountOf(x.r.crop, x.viableQty),0)? ' (part trays pooled per crop)' : ''}${growingSeedlings>0? ' · '+(growingTrays? growingTrays.toLocaleString()+' tray'+(growingTrays===1?'':'s') : '< 1 tray')+' still growing, not counted here' : ''}</div>
     </div>`;
     })()}
     <div class="card kpi b3">
@@ -2842,15 +2842,20 @@ function renderDashboard(root){
       <canvas id="dash-sales-canvas" height="105" style="margin-top:10px;"></canvas>
     </div>
     <div class="card b5">
-      <div class="card-title">Top Crops by Readiness</div>
-      ${readiness.length? readiness.map(({r,c,viableQty})=>`
-        <div class="readiness-row">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap;">
+        <div class="card-title" style="margin:0;">Batches by Readiness</div>
+        ${readiness.length>8 && CURRENT.access.includes('seedlingstock')? `<button class="btn sm ghost" onclick="nav('seedlingstock')">All ${readiness.length} batches →</button>` : ''}
+      </div>
+      ${readiness.length? readiness.slice(0,8).map(({r,c,viableQty})=>{
+        const overdue = c.daysElapsed > c.totalDays;
+        return `
+        <div class="readiness-row" style="cursor:pointer;" onclick="openBatchDrawer('${esc(r.id)}')">
           <span class="rr-dot" style="background:${CROP_COLORS[r.crop]||'var(--sage)'};"></span>
-          <div class="rr-name">${esc(r.variety)}<span>${esc(r.crop)} · ${traysOfLabel(r.crop, viableQty)} · ${STAGES[c.stage-1]}</span></div>
-          <div class="progress-line" style="flex:1;"><i style="width:${c.pct}%;background:${CROP_COLORS[r.crop]||'var(--sage)'};"></i></div>
-          <span class="rr-pct">${c.pct}%</span>
-        </div>`).join('') : '<div class="small-muted">No sowing records yet.</div>'}
-      <div class="small-muted" style="margin-top:8px;">Every batch by growth progress, so this list includes stock still hardening, not only what is ready to sell. ${trayBasisNote()} Germination rates are in Nursery Health on the batch detail.</div>
+          <div class="rr-name">${esc(r.variety)} <span class="mono" style="font-weight:400;">${esc(r.batchCode)}</span><span>${esc(r.crop)} · ${traysOfLabel(r.crop, viableQty)} · ${STAGES[c.stage-1]}${overdue? ' · '+(c.daysElapsed-c.totalDays)+' day'+(c.daysElapsed-c.totalDays===1?'':'s')+' past ready date' : ''}</span></div>
+          <div class="progress-line" style="flex:1;"><i style="width:${c.pct}%;background:${overdue? 'var(--gold)' : (CROP_COLORS[r.crop]||'var(--sage)')};"></i></div>
+          <span class="rr-pct" title="Day ${c.daysElapsed} of ${c.totalDays}">${overdue? 'day '+c.daysElapsed+'/'+c.totalDays : c.pct+'%'}</span>
+        </div>`; }).join('') : '<div class="small-muted">No sowing records yet.</div>'}
+      <div class="small-muted" style="margin-top:8px;">Progress is days elapsed against the ready days entered at sowing, for every open batch, so hardening stock appears here too. Tray counts assume the expected germination entered at sowing (see the batch detail). ${trayBasisNote()}</div>
     </div>
 
     <div class="card b6">
@@ -3474,7 +3479,12 @@ function exportCashSalesPDF(){
 /* Seedling batches: viable = sown qty x germination; sales that reference a batch
    draw it down, and a batch can be closed (sold out / transplanted). Every reader
    (dashboard, pipeline, Seedling Stock, POS list, reports) uses batchRemaining(). */
-function batchViable(r){ return Math.round((+r.qty||0)*((+r.germinationPct||0)/100)); }
+function germinationOf(r){
+  /* blank means not assessed yet: count the batch at full emergence rather than as dead stock */
+  if(r.germinationPct==null || r.germinationPct==='') return 100;
+  return Math.min(100, Math.max(0, +r.germinationPct||0));
+}
+function batchViable(r){ return Math.round((+r.qty||0)*(germinationOf(r)/100)); }
 function soldFromBatch(r){ return DATA.cashSales.reduce((a,s)=>a + saleItems(s).filter(it=>it.batchId===r.id).reduce((x,it)=>x+itemSeedlings(it),0), 0); }
 function batchRemaining(r){ if(r.closed) return 0; return Math.max(0, batchViable(r) - soldFromBatch(r)); }
 function readyBatches(){ return DATA.sowingRecords.filter(r=>computeStage(r).stage===4 && batchRemaining(r)>0); }
@@ -3555,7 +3565,11 @@ function saleItems(s){
   const seedlings = unit==='trays' ? qty*(traySize||0) : (unit==='seedlings' ? qty : 0);
   return [{crop:s.crop, qty, unit, traySize, seedlings, unitPrice:+s.unitPrice||0, total:+s.total||0, batchId:s.batchId||null, batchCode:s.batchCode||null}];
 }
-function itemSeedlings(it){ return it.seedlings!=null? +it.seedlings||0 : (it.unit==='trays'? (+it.qty||0)*(+it.traySize||0) : (it.unit==='seedlings'||!it.unit? +it.qty||0 : 0)); }
+function itemSeedlings(it){
+  if(it.seedlings!=null) return +it.seedlings||0;
+  if(it.unit==='trays') return (+it.qty||0) * (+it.traySize>0 ? +it.traySize : (traySizeFromPriceList(it.crop) || defaultTrayCells()));
+  return (it.unit==='seedlings'||!it.unit) ? +it.qty||0 : 0;
+}
 function itemQtyLabel(it){
   if(it.unit==='trays') return `${(+it.qty||0).toLocaleString()} tray${+it.qty===1?'':'s'}${it.traySize? ' × '+it.traySize : ''}`;
   return `${(+it.qty||0).toLocaleString()} ${it.unit||'seedlings'}`;
@@ -3579,31 +3593,26 @@ function saleTraysTotal(s){ return saleItems(s).reduce((a,it)=> a + (it.unit==='
 function traySizeFromPriceList(crop){
   const c = String(crop||'').trim().toLowerCase();
   if(!c) return null; /* every name "includes" the empty string, so guard it */
-  const pl = (DATA.priceList||[]).find(p=>{
-    if(p.unit!=='trays' || !(+p.traySize>0)) return false;
-    const name = (p.name||'').toLowerCase();
-    if(name.includes(c)) return true;
-    /* "Tomato seedlings (tray)" should match the crop "Tomato Zara F1" */
-    const base = name.replace(/(seedlings?|trays?)/g,' ').replace(/[^a-z0-9]+/g,' ').trim();
-    return !!base && base.split(/\s+/).every(w=>c.includes(w));
-  });
-  return pl? +pl.traySize : null;
+  /* whole words only: the product's crop words must all be words of the crop, so
+     "Tomato seedlings (tray)" fits "Tomato Zara F1" but "Cherry tomato tray" does not
+     fit "Tomato". Among several fits the most specific product wins (most crop words), then the exact crop, then a registered tray size. */
+  const cropWords = c.replace(/[^a-z0-9]+/g,' ').trim().split(/\s+/).filter(Boolean);
+  const registered = new Set(trayTypes().map(t=>+t.cells));
+  const fits = (DATA.priceList||[]).map(p=>{
+    if(p.unit!=='trays' || !(+p.traySize>0)) return null;
+    const base = (p.name||'').toLowerCase().replace(/\([^)]*\)/g,' ').replace(/\b(seedlings?|trays?|plugs?|cells?|packs?|of|per)\b/g,' ').replace(/[^a-z0-9]+/g,' ').trim();
+    const words = base.split(/\s+/).filter(Boolean);
+    if(!words.length || !words.every(w=>cropWords.includes(w))) return null;
+    return { size:+p.traySize, score: words.length*10 + (words.length===cropWords.length? 5 : 0) + (registered.has(+p.traySize)? 1 : 0) };
+  }).filter(Boolean).sort((a,b)=>b.score-a.score);
+  return fits.length ? fits[0].size : null;
 }
-/* seedlings-per-tray for a crop: the POS price list first, then the most recent
-   tray sale of that crop; null when the workspace has never defined one */
-function traySizeFor(crop){
-  const fromList = traySizeFromPriceList(crop);
-  if(fromList) return fromList;
-  const c = String(crop||'').trim().toLowerCase();
-  if(!c) return null;
-  for(let i=DATA.cashSales.length-1; i>=0; i--){
-    for(const it of saleItems(DATA.cashSales[i])){
-      if(it.unit==='trays' && +it.traySize>0 && (it.crop||'').toLowerCase().includes(c)) return +it.traySize;
-    }
-  }
-  return null;
-}
-/* tray size to display with: the priced/last-sold size for the crop where the workspace
+/* seedlings-per-tray for a crop: a tray product priced for it in the POS price list, else
+   null (the caller falls back to the registered default tray). It used to fall back to the
+   crop's most recent tray sale, which let one mistyped tray size on a receipt become the
+   crop's tray size on every screen. */
+function traySizeFor(crop){ return traySizeFromPriceList(crop); }
+/* tray size to display with: the priced size for the crop where the workspace
    has one, else the default tray type, so a tray figure is never silently
    downgraded to a seedling count */
 function traySizeOf(crop){ return traySizeFor(crop) || defaultTrayCells(); }
@@ -3640,9 +3649,9 @@ function trayBasisNote(){ const d = defaultTrayType(); return anyTraySizePriced(
   ? 'Tray sizes come from the POS price list where a tray product is priced for that crop; every other crop is counted in '+d.cells+'-cell trays ('+d.name+', the default tray type).'
   : 'Tray counts use the default tray type, '+d.name+' ('+d.cells+' cells). A tray product priced in the POS price list overrides it for that crop; the Super User sets tray types in Users & Access.'; }
 function traysOfLabel(crop, seedlings){
-  const n = +seedlings||0, t = trayCountOf(crop, n);
+  const n = +seedlings||0, ts = traySizeOf(crop), t = trayCountOf(crop, n);
   /* a part tray still has to be visible, or small holdings read as zero stock */
-  return t? '≈ '+t.toLocaleString()+' tray'+(t===1?'':'s')+' of '+traySizeOf(crop) : (n? '< 1 tray ('+n.toLocaleString()+' seedlings)' : '0 trays');
+  return t? '≈ '+t.toLocaleString()+' × '+ts+'-cell tray'+(t===1?'':'s') : (n? '< 1 tray ('+n.toLocaleString()+' seedlings)' : '0 trays');
 }
 function saleLooseSeedlings(s){ return saleItems(s).reduce((a,it)=> a + ((it.unit||'seedlings')==='seedlings'? (+it.qty||0) : 0), 0); }
 function saleSeedlingsTotal(s){ return saleItems(s).reduce((a,it)=>a+itemSeedlings(it),0); }
@@ -3747,6 +3756,9 @@ function openSaleModal(batchId){
       const perBatch = {};
       for(const r of rows){
         if(r.unit==='trays' && !(+r.traySize>0)){ toast(`Enter the tray size (seedlings per tray) for "${r.product}".`,'err'); return; }
+        if(r.unit==='trays' && !trayTypes().some(t=>+t.cells===+r.traySize) && +r.traySize!==(traySizeFromPriceList(r.product)||0)){
+          if(!confirm(`${r.traySize} seedlings per tray is not a registered tray type (${trayTypes().map(t=>t.cells).join(', ')}). Use ${r.traySize} for "${r.product}" anyway? It only affects this receipt's seedling count.`)) return;
+        }
         if(r.batchId){
           if(r.unit!=='trays' && r.unit!=='seedlings'){ toast(`Batch lines are sold in seedlings or trays ("${r.product}").`,'err'); return; }
           perBatch[r.batchId] = (perBatch[r.batchId]||0) + saleRowSeedlings(r);
@@ -4565,16 +4577,15 @@ const COMMON_CROPS = ['Tomato','Capsicum','Cucumber','Brassica (Cabbage/Kale)','
 const STAGES = ['Sown','Germinating','Hardening','Ready for Sale'];
 function computeStage(rec){
   const sownDate = new Date((rec.dateSown||todayISO())+'T00:00:00');
-  const now = new Date();
+  const now = new Date(todayISO()+'T00:00:00'); /* whole days: a batch turns ready on its ready date, not at noon the day before */
   const daysElapsed = isNaN(sownDate.getTime()) ? 0 : Math.max(0, Math.round((now-sownDate)/86400000));
   const totalDays = rec.readyDays || 30;
   const frac = totalDays>0 ? daysElapsed/totalDays : 1;
-  let stage;
-  if(frac>=1) stage=4;
-  else if(frac>=0.6) stage=3;
-  else if(frac>=0.15) stage=2;
-  else stage=1;
-  return { stage, daysElapsed, totalDays, daysLeft: Math.max(0,totalDays-daysElapsed), readyDate: addDaysTo(rec.dateSown, totalDays), pct: Math.min(100, Math.round(frac*100)) };
+  const pct = Math.min(100, Math.round(frac*100));
+  /* the stage is read off the same rounded figure the screens print, so "60%" never sits
+     beside "Germinating" on one row */
+  const stage = pct>=100 ? 4 : (pct>=60 ? 3 : (pct>=15 ? 2 : 1));
+  return { stage, daysElapsed, totalDays, daysLeft: Math.max(0,totalDays-daysElapsed), readyDate: addDaysTo(rec.dateSown, totalDays), pct };
 }
 function stockStatusBadge(s){
   const m={'Ready for Sale':'green','Hardening':'gold','Germinating':'amber','Sown':'slate'};
@@ -4600,7 +4611,7 @@ function openBatchDrawer(id){
     ${specList([
       ['Status', stockStatusBadge(STAGES[c.stage-1])],
       ['Quantity sown', `<span class="mono">${r.qty.toLocaleString()}</span> seeds`],
-      ['Est. viable', `<b class="mono">${viableQty.toLocaleString()}</b> seedlings at ${r.germinationPct}% germination`],
+      ['Est. viable', `<b class="mono">${viableQty.toLocaleString()}</b> seedlings at ${(r.germinationPct==null||r.germinationPct==='')? '100% (germination not recorded)' : germinationOf(r)+'% expected germination'}`],
       ['Sold / remaining', `<span class="mono">${soldQty.toLocaleString()}</span> sold · <b class="mono">${remainingQty.toLocaleString()}</b> seedlings remaining${r.closed? ' · '+st('slate','Closed') : ''}`],
       ['Remaining in trays', `<b class="mono">${traysOfLabel(r.crop, remainingQty)}</b>`],
       ['Date sown', fmtDate(r.dateSown)],
@@ -4851,7 +4862,7 @@ function renderSowing(root){
       {key:'readyDays', label:'Ready Days', align:'right', val:r=>r.readyDays, html:r=>`<span class="mono">${r.readyDays}d</span>`},
       {key:'readyDate', label:'Est. Ready', val:r=>computeStage(r).readyDate, html:r=>fmtDate(computeStage(r).readyDate)},
       {key:'bay', label:'Bay', val:r=>r.bay},
-      {key:'germ', label:'Germ. %', align:'right', val:r=>r.germinationPct, html:r=>`<span class="mono">${r.germinationPct}%</span>`},
+      {key:'germ', label:'Germ. %', align:'right', val:r=>germinationOf(r), html:r=>`<span class="mono">${(r.germinationPct==null||r.germinationPct==='')? 'n/r' : germinationOf(r)+'%'}</span>`},
       {key:'stage', label:'Stage', val:r=>computeStage(r).stage, html:r=>stockStatusBadge(STAGES[computeStage(r).stage-1])},
       {key:'sownBy', label:'Sown By', val:r=>r.sownBy},
     ],
@@ -4914,8 +4925,13 @@ function openSowingModal(presetLotId){
       const variety=document.getElementById('sw-variety').value.trim();
       const crop=document.getElementById('sw-crop').value.trim();
       const batch=document.getElementById('sw-batch').value.trim();
-      const readyDays=+document.getElementById('sw-ready').value;
+      const readyDays=Math.round(+document.getElementById('sw-ready').value);
       if(!variety||!batch||!crop||!readyDays){toast('Batch code, crop type, variety and ready days are required.','err');return;}
+      if(!(readyDays>=1)){ toast('Ready days must be at least 1.','err'); return; }
+      const dateSownVal = document.getElementById('sw-date').value;
+      if(dateSownVal && dateSownVal > todayISO()){ toast('The sowing date cannot be in the future.','err'); return; }
+      const germRaw = document.getElementById('sw-germ').value.trim();
+      if(germRaw!=='' && !(+germRaw>=0 && +germRaw<=100)){ toast('Expected germination must be between 0 and 100%.','err'); return; }
       /* seed drawn from an inventory lot: seeds by count, or a weight for g/kg lots */
       const lotSel = document.getElementById('sw-lotsel');
       const lot = (lotSel && lotSel.value) ? (DATA.seedInventory||[]).find(l=>l.id===lotSel.value) : null;
@@ -4929,7 +4945,7 @@ function openSowingModal(presetLotId){
         seedLot:document.getElementById('sw-lot').value, seedSource:document.getElementById('sw-source').value,
         certNo:document.getElementById('sw-cert').value, seedClass:document.getElementById('sw-class').value,
         qty:+document.getElementById('sw-qty').value, dateSown:document.getElementById('sw-date').value, readyDays,
-        bay:document.getElementById('sw-bay').value, germinationPct:+document.getElementById('sw-germ').value,
+        bay:document.getElementById('sw-bay').value, germinationPct: germRaw==='' ? null : +germRaw,
         sownBy:document.getElementById('sw-by').value || CURRENT.name, seedLotId: lot? lot.id : null, seedLotUse: lot? lotUse : null});
       if(lot) deductSeedLot(lot.id, lotUse, batch);
       logActivity(`Logged sowing record ${batch} (${crop} - ${variety}), ready in ${readyDays} days${lot? ', '+lotUse+' '+lot.unit+' drawn from seed lot '+(lot.lotNo||lot.crop) : ''}.`);
@@ -5000,7 +5016,7 @@ function renderSownStatusGrid(){
       </div>
       <div style="margin-top:16px;">${growthStepperHTML(c.stage)}</div>
       <div class="progress-line" style="margin-top:12px;"><i style="width:${c.pct}%;"></i></div>
-      <div class="small-muted" style="margin-top:8px;">Sown ${fmtDate(r.dateSown)} · Est. ready ${fmtDate(c.readyDate)} (${r.readyDays}-day cycle) · Qty ${r.qty.toLocaleString()} sown at ${r.germinationPct}% expected germination</div>
+      <div class="small-muted" style="margin-top:8px;">Sown ${fmtDate(r.dateSown)} · Est. ready ${fmtDate(c.readyDate)} (${r.readyDays}-day cycle) · Qty ${r.qty.toLocaleString()} sown at ${(r.germinationPct==null||r.germinationPct==='')? '100% (germination not recorded)' : germinationOf(r)+'% expected germination'}</div>
     </div>`;
   }).join('')}
   </div>`;
@@ -7551,7 +7567,7 @@ function buildReport(key){
   const stamp = 'Generated '+new Date().toLocaleString('en-KE')+' by '+CURRENT.name+' ('+CURRENT.designation+')';
   if(key==='production'){
     const rows = DATA.sowingRecords.map(r=>{ const c=computeStage(r); const v=batchViable(r), sold=soldFromBatch(r), rem=batchRemaining(r);
-      return [r.batchCode, r.crop, r.variety, fmtDate(r.dateSown), r.qty.toLocaleString(), r.germinationPct+'%', v.toLocaleString(), sold.toLocaleString(), rem.toLocaleString(), r.closed? 'Closed' : STAGES[c.stage-1], fmtDate(c.readyDate)]; });
+      return [r.batchCode, r.crop, r.variety, fmtDate(r.dateSown), r.qty.toLocaleString(), ((r.germinationPct==null||r.germinationPct==='')? 'n/r' : germinationOf(r)+'%'), v.toLocaleString(), sold.toLocaleString(), rem.toLocaleString(), r.closed? 'Closed' : STAGES[c.stage-1], fmtDate(c.readyDate)]; });
     const totalSown = DATA.sowingRecords.reduce((a,b)=>a+b.qty,0);
     const totalViable = DATA.sowingRecords.reduce((a,b)=>a+batchRemaining(b),0);
     const readyRecs = DATA.sowingRecords.filter(r=>computeStage(r).stage===4);
@@ -7560,7 +7576,7 @@ function buildReport(key){
        beside them because that is how the nursery sells and reports commercially. */
     const readyTrays = stockTrays(readyRecs.map(r=>({r, viableQty: batchRemaining(r)})));
     const allTrays = stockTrays(DATA.sowingRecords.map(r=>({r, viableQty: batchRemaining(r)})));
-    const avgGerm = DATA.sowingRecords.length? (DATA.sowingRecords.reduce((a,b)=>a+b.germinationPct,0)/DATA.sowingRecords.length).toFixed(1):'0';
+    const avgGerm = DATA.sowingRecords.length? (DATA.sowingRecords.reduce((a,b)=>a+germinationOf(b),0)/DATA.sowingRecords.length).toFixed(1):'0';
     return { title:'Nursery Production Report', subtitle:stamp,
       sections:[{heading:'Production by batch', head:['Batch','Crop','Variety','Sown','Qty Sown','Germ. %','Est. Viable','Sold','Remaining','Stage','Ready Date'], rows}],
       summary:[['Batches', DATA.sowingRecords.length], ['Total seeds sown', totalSown.toLocaleString()], ['Estimated viable trays', '≈ '+allTrays.toLocaleString()], ['Estimated viable seedlings', totalViable.toLocaleString()], ['Ready for sale now', '≈ '+readyTrays.toLocaleString()+' trays ('+ready.toLocaleString()+' seedlings)'], ['Average germination', avgGerm+'%'], ['Tray basis', trayBasisNote()]] };
