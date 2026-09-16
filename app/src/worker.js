@@ -124,11 +124,15 @@ const COLLECTIONS = [
   'sowingRecords', 'cashSales', 'procurement', 'requisitions', 'leads', 'auditLog',
   'reportsAccessList', 'accessRequests', 'aiScans', 'activityStats', 'weatherLocation',
   'salesHistory', 'priceHistory', 'companyKraPin', 'leadsMonthlyTarget', 'org',
+  'dailyExpenses', 'accuWeatherApiKey', 'googleMapsApiKey',
 ];
+/* settings every device reads but only admins may write (see the collections PUT route) */
+const ADMIN_ONLY_COLLECTIONS = ['org', 'companyKraPin', 'accuWeatherApiKey', 'googleMapsApiKey'];
 const OPERATIONAL = [
   'staff', 'consumables', 'seedlingStock', 'seedInventory', 'priceList', 'suppliers', 'livestockInventory', 'farmPlots', 'rainfallLog',
   'sowingRecords', 'cashSales', 'procurement', 'requisitions', 'leads', 'auditLog',
   'accessRequests', 'aiScans', 'activityStats', 'salesHistory', 'priceHistory',
+  'dailyExpenses',
 ];
 
 let schemaReady = false;
@@ -326,7 +330,7 @@ const HISTORY_KEEP = 40;
    from Users & Access; a write that changes nothing keeps no version */
 async function putCollection(env, name, jsonText, by) {
   const prev = await env.SPN_DB.prepare('SELECT json, updated_at FROM collections WHERE name = ?').bind(name).first();
-  if (prev && prev.json && prev.json !== jsonText) {
+  if (prev && prev.json && prev.json !== jsonText && !/ApiKey$/.test(name)) {
     let count = null; try { const v = JSON.parse(prev.json); count = Array.isArray(v) ? v.length : null; } catch (e) {}
     await env.SPN_DB.batch([
       env.SPN_DB.prepare('INSERT INTO collection_history (name, json, count, updated_at, by) VALUES (?, ?, ?, ?, ?)').bind(name, prev.json, count, prev.updated_at || Date.now(), by || null),
@@ -349,12 +353,14 @@ async function putCollectionIfBase(env, name, jsonText, base, by) {
   if (cur.hash !== realHash) { await env.SPN_DB.prepare('UPDATE collections SET hash = ? WHERE name = ? AND json = ?').bind(realHash, name, cur.json).run(); }
   let prevCount = null; try { const v = JSON.parse(cur.json); prevCount = Array.isArray(v) ? v.length : null; } catch (e) {}
   const now = Date.now();
-  const res = await env.SPN_DB.batch([
-    env.SPN_DB.prepare('INSERT INTO collection_history (name, json, count, updated_at, by) SELECT name, json, ?, updated_at, ? FROM collections WHERE name = ? AND hash = ? AND json != ?').bind(prevCount, by || null, name, base, jsonText),
-    env.SPN_DB.prepare('UPDATE collections SET json = ?, hash = ?, updated_at = ? WHERE name = ? AND hash = ?').bind(jsonText, syncHash(jsonText), now, name, base),
-    env.SPN_DB.prepare('DELETE FROM collection_history WHERE name = ? AND id NOT IN (SELECT id FROM collection_history WHERE name = ? ORDER BY id DESC LIMIT ?)').bind(name, name, HISTORY_KEEP),
-  ]);
-  return !!(res && res[1] && res[1].meta && res[1].meta.changes === 1);
+  const keepHistory = !/ApiKey$/.test(name);
+  const stmts = [];
+  if (keepHistory) stmts.push(env.SPN_DB.prepare('INSERT INTO collection_history (name, json, count, updated_at, by) SELECT name, json, ?, updated_at, ? FROM collections WHERE name = ? AND hash = ? AND json != ?').bind(prevCount, by || null, name, base, jsonText));
+  stmts.push(env.SPN_DB.prepare('UPDATE collections SET json = ?, hash = ?, updated_at = ? WHERE name = ? AND hash = ?').bind(jsonText, syncHash(jsonText), now, name, base));
+  if (keepHistory) stmts.push(env.SPN_DB.prepare('DELETE FROM collection_history WHERE name = ? AND id NOT IN (SELECT id FROM collection_history WHERE name = ? ORDER BY id DESC LIMIT ?)').bind(name, name, HISTORY_KEEP));
+  const res = await env.SPN_DB.batch(stmts);
+  const upd = res && res[keepHistory ? 1 : 0];
+  return !!(upd && upd.meta && upd.meta.changes === 1);
 }
 
 export default {
@@ -886,6 +892,15 @@ async function handleApi(req, env, url) {
         const name = route.slice('collections/'.length);
         if (!COLLECTIONS.includes(name)) return json({ error: 'Unknown collection' }, 404);
         const text = await req.text();
+        /* workspace configuration is written by Admin / Super User only. A non-admin device
+           can still hold a copy that merely echoes the server (the login screen adopts org),
+           so an identical write is a harmless no-op; a different one gets the server copy back. */
+        if (ADMIN_ONLY_COLLECTIONS.includes(name) && !isAdmin(session.user)) {
+          const cur = await env.SPN_DB.prepare('SELECT json FROM collections WHERE name = ?').bind(name).first();
+          if (cur && cur.json === text) return json({ ok: true, hash: syncHash(text) });
+          if (cur && cur.json) return json({ error: 'Only an Admin or the Super User can change this setting', code: 'forbidden', json: cur.json, hash: syncHash(cur.json) }, 409);
+          return json({ error: 'Only an Admin or the Super User can change this setting', code: 'forbidden' }, 403);
+        }
         /* D1 caps a row at 2,000,000 bytes (UTF-8); say so plainly rather than failing every retry */
         const bytes = new TextEncoder().encode(text).length;
         if (bytes > 1900000) return json({ error: 'This module holds too much data for one record (' + Math.round(bytes / 1048576 * 10) / 10 + ' MB). Archive older entries from Users & Access before more can be saved.', code: 'too-large', bytes }, 413);
