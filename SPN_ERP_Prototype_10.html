@@ -890,7 +890,7 @@ const ROLE_DEFAULT_ACCESS = {
   HOD: ['dashboard','sowing','seedinventory','sownstatus','seedlingstock','requisitions','reports','scouting','salesanalytics','livestock','acreage','irrigation','farm'],
   HR: ['dashboard','hr','requisitions','reports','leadsmap','departments','salesanalytics'],
   Finance: ['dashboard','requisitions','reports','dailyexpenses'],
-  Sales: ['dashboard','cashsale','leads','leadsmap','weather','salesanalytics','dailyexpenses'],
+  Sales: ['dashboard','cashsale','leads','leadsmap','weather','salesanalytics','dailyexpenses','reports'],
   Agronomist: ['dashboard','sowing','seedinventory','sownstatus','scouting','weather','requisitions','leadsmap','livestock','acreage','irrigation','farm'],
   Procurement: ['dashboard','procurement','consumables','suppliers','seedinventory','requisitions','reports'],
   Marketing: ['dashboard','leads','reports','leadsmap','salesanalytics'],
@@ -1147,6 +1147,7 @@ const REPORT_DEFS = [
   {key:'compliance', name:'Seed Compliance Register', desc:'Seed lot, source, certificate number and class per batch - Seeds & Plant Varieties Act traceability record.', access:['Admin','HOD']},
   {key:'seeds', name:'Seeds Inventory Report', desc:'Seed lots on hand: crop, variety, supplier, lot and KEPHIS numbers, germination, received and expiry dates, quantity drawn by sowing vs remaining, lots needing attention.', access:['Admin','HOD','Procurement']},
   {key:'sales', name:'Cash Sales & VAT Summary', desc:'Daily/monthly sales register with VAT treatment notes, formatted for KRA filing support.', access:['Admin','HR']},
+  {key:'clients', name:'Clients & Leads Directory', desc:'Every customer and farmer lead in one list: phone and email, region (ward and county from GPS where captured), location, crops of interest from leads and purchases, then each client\'s leads and cash sales beneath.', access:['Admin','Sales','Marketing','HOD']},
   {key:'stock', name:'Stock Valuation Report', desc:'Consumables and nursery stock on hand in trays and seedlings, valued at cost - for period-end reconciliation.', access:['Admin','Procurement']},
   {key:'procurement', name:'Procurement Report', desc:'Purchase requests and orders: item, quantity, supplier, estimated cost, status, requested and delivered dates, with open and delivered totals.', access:['Admin','Procurement','Finance']},
   {key:'hr', name:'HR & Payroll Support Report', desc:'Staff headcount, permanent vs casual split, attendance-linked requisitions.', access:['Admin','HR']},
@@ -4825,8 +4826,16 @@ function canonicalCrop(line){
     ...(DATA.farmPlots||[]).map(p=>p.crop),
     ...plBases,
   ].filter(Boolean))];
+  if(line && typeof line==='object' && line.__all) return known; /* the directory scan asks for the list itself */
   const hit = known.filter(k=>t.includes(String(k).toLowerCase())).sort((a,b)=>b.length-a.length)[0];
   return hit || 'Other';
+}
+/* every known crop named in a free-text interest ("Brassica and Onion - 1 acre" names two) */
+function cropsInText(text){
+  const t = String(text||'').toLowerCase().trim();
+  if(!t) return [];
+  const hits = canonicalCrop({__all:true}).filter(k=>t.includes(String(k).toLowerCase()));
+  return hits.length ? hits : [String(text).trim()];
 }
 const EXTRA_CROP_COLORS = ['#3E6FA8','#7A5D22','#5A4B7E','#C8842A','#4C8C57','#8C5518'];
 /* the four original crops keep their house colours; anything else the nursery sells
@@ -8340,6 +8349,83 @@ function openReportViewersModal(key){
     }}
   ]);
 }
+/* ward and county for a GPS point, read off the boundary overlay (ray casting). Empty
+   when the point is outside the covered counties, so the typed location stands alone. */
+function regionForPoint(lat, lng){
+  if(typeof WARD_BOUNDARIES_GEOJSON==='undefined' || !isFinite(+lat) || !isFinite(+lng)) return '';
+  const x = +lng, y = +lat;
+  const pretty = s => String(s||'').toLowerCase().replace(/\b\w/g, ch=>ch.toUpperCase());
+  for(const f of WARD_BOUNDARIES_GEOJSON.features){
+    const g = f.geometry || {};
+    const rings = g.type==='Polygon' ? [g.coordinates[0]] : (g.type==='MultiPolygon' ? g.coordinates.map(p=>p[0]) : []);
+    for(const ring of rings){
+      let inside = false;
+      for(let i=0, j=ring.length-1; i<ring.length; j=i++){
+        const xi=ring[i][0], yi=ring[i][1], xj=ring[j][0], yj=ring[j][1];
+        if(((yi>y)!==(yj>y)) && (x < (xj-xi)*(y-yi)/(yj-yi)+xi)) inside = !inside;
+      }
+      if(inside){ const p = f.properties||{}; const key = (typeof wardCountyKey==='function') ? wardCountyKey(p.county_name) : ''; const county = key==='ELGEYO-MARAKWET' ? 'Elgeyo-Marakwet' : pretty(key || String(p.county_name||'').replace('/', '-')); return [pretty(p.ward_name), county].filter(Boolean).join(' · '); }
+    }
+  }
+  return '';
+}
+/* one contact per person across farmer leads and cash-sale customers, matched by phone
+   (last nine digits) or, without a phone, by name */
+function clientDirectory(){
+  /* a Kenyan number is nine digits after the leading 0 or 254; anything shorter is not a
+     usable identity and falls back to the name */
+  const normPhone = p => String(p||'').replace(/\D/g,'').slice(-9);
+  const normName = n => String(n||'').trim().toLowerCase().replace(/\s+/g,' ');
+  const keyOf = (name, phone) => { const ph = normPhone(phone); return ph.length===9 ? 'p:'+ph : 'n:'+normName(name); };
+  const map = new Map();
+  const get = (name, phone) => {
+    const k = keyOf(name, phone);
+    if(!map.has(k)) map.set(k, {names:new Set(), phones:new Set(), emails:new Set(), places:new Set(), gps:null, crops:new Set(), leads:[], sales:[], lastTs:0});
+    const c = map.get(k); const nm = String(name||'').trim(); if(nm) c.names.add(nm); if(phone && String(phone).trim()) c.phones.add(String(phone).trim()); return c;
+  };
+  /* a lead saved without GPS carries the nursery-area placeholder, which is not a capture */
+  const isPlaceholder = (la, ln) => Math.abs(la-0.05)<1e-9 && Math.abs(ln-35.95)<1e-9;
+  scopedLeads().forEach(l=>{
+    const c = get(l.farmer, l.phone);
+    if(l.location && l.location!=='-') c.places.add(l.location);
+    if(!c.gps && l.lat!=null && l.lng!=null && isFinite(+l.lat) && isFinite(+l.lng) && !isPlaceholder(+l.lat, +l.lng)) c.gps = {lat:+l.lat, lng:+l.lng};
+    cropsInText(l.interest).forEach(x=>c.crops.add(x));
+    c.leads.push(l); c.lastTs = Math.max(c.lastTs, +l.capturedAt||0);
+  });
+  scopedSales().forEach(s=>{
+    const c = get(s.customer, s.phone);
+    if(s.email) c.emails.add(s.email);
+    if(s.location) c.places.add(s.location);
+    if(!c.gps && s.customerLat!=null && s.customerLng!=null && isFinite(+s.customerLat) && isFinite(+s.customerLng)) c.gps = {lat:+s.customerLat, lng:+s.customerLng};
+    /* produce lines (kg, pcs, bags) are not a crop of interest for seedlings */
+    saleItems(s).forEach(it=>{ if(it.crop && (it.unit==='seedlings' || it.unit==='trays' || it.batchId)){ const k = canonicalCrop(it.crop); c.crops.add(k==='Other' ? String(it.crop).trim() : k); } });
+    c.sales.push(s); c.lastTs = Math.max(c.lastTs, s.date ? new Date(s.date+'T00:00:00').getTime() : 0);
+  });
+  /* a record without a phone folds into the one phone contact with the same name */
+  for(const [k, c] of [...map.entries()]){
+    if(!k.startsWith('n:')) continue;
+    const nm = k.slice(2);
+    const owners = [...map.entries()].filter(([pk, pc])=>pk.startsWith('p:') && [...pc.names].some(x=>normName(x)===nm));
+    if(owners.length!==1) continue;
+    const t = owners[0][1];
+    c.names.forEach(x=>t.names.add(x)); c.emails.forEach(x=>t.emails.add(x)); c.places.forEach(x=>t.places.add(x)); c.crops.forEach(x=>t.crops.add(x));
+    if(!t.gps) t.gps = c.gps; t.leads.push(...c.leads); t.sales.push(...c.sales); t.lastTs = Math.max(t.lastTs, c.lastTs);
+    map.delete(k);
+  }
+  const list = [...map.values()].map(c=>{
+    c.name = [...c.names].join(' / ') || 'Unknown';
+    c.crops.delete('');
+    c.region = c.gps ? regionForPoint(c.gps.lat, c.gps.lng) : '';
+    c.trays = salesTrays(c.sales);
+    c.spend = c.sales.reduce((a,s)=>a+(+s.total||0),0);
+    c.seedlings = c.sales.reduce((a,s)=>a+saleSeedlingsTotal(s),0);
+    const open = c.leads.filter(l=>!['Closed','Lost','Won'].includes(l.status));
+    c.leadSummary = c.leads.length ? c.leads.length+' lead'+(c.leads.length===1?'':'s')+(open.length? ' · '+open.length+' open' : '') : '';
+    return c;
+  });
+  list.sort((a,b)=> (b.spend-a.spend) || (b.lastTs-a.lastTs) || a.name.localeCompare(b.name));
+  return list;
+}
 function buildReport(key){
   const stamp = 'Generated '+new Date().toLocaleString('en-KE')+' by '+CURRENT.name+' ('+CURRENT.designation+')';
   if(key==='production'){
@@ -8448,6 +8534,29 @@ function buildReport(key){
     return { title:'Farm Plots Report', subtitle:stamp, landscape:true,
       sections,
       summary:[['Active plots', active.length], ['Acres under crop', active.reduce((a,p)=>a+(+p.areaAcres||0),0).toFixed(2)], ['Harvest due within 7 days', active.filter(p=>plotProgress(p).daysLeft<=7).length], ['GLOBALG.A.P. certified plots', plots.filter(p=>p.gapStatus==='Certified').length+' of '+plots.length], ['Rainfall last 30 days', rainTotal(addDays(-29), todayISO()).toFixed(1)+' mm'], ['Rainfall year to date', rainTotal(todayISO().slice(0,4)+'-01-01', todayISO()).toFixed(1)+' mm']] };
+  }
+  if(key==='clients'){
+    const dir = clientDirectory();
+    /* local calendar date: a sale's midnight timestamp is the previous UTC day in Kenya */
+    const tsDate = ts => { if(!ts) return '-'; const d = new Date(ts); return fmtDate(d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')); };
+    const seesSales = CURRENT.access.includes('cashsale') || CURRENT.role==='Admin' || isSuper();
+    const rows = dir.map(c=>[c.name, [...c.phones].join(' / ')||'-', [...c.emails].join(' / ')||'-', c.region||'-', [...c.places].join('; ')||'-', [...c.crops].join(', ')||'-', c.leadSummary||'-', c.sales.length? c.sales.length+' · '+c.trays.toLocaleString()+' trays' : '-', c.spend? money(c.spend) : '-', tsDate(c.lastTs)]);
+    const leadRows = [], saleRows = [];
+    dir.forEach(c=>{
+      c.leads.slice().sort((a,b)=>(+b.capturedAt||0)-(+a.capturedAt||0)).forEach(l=>leadRows.push([c.name, l.phone||'-', l.location||'-', l.interest||'-', l.status||'-', l.assigned||'-', l.followUp? fmtDate(l.followUp) : '-', tsDate(+l.capturedAt||0), (l.lat!=null && l.lng!=null && isFinite(+l.lat))? (+l.lat).toFixed(5)+', '+(+l.lng).toFixed(5) : '-']));
+      c.sales.slice().sort((a,b)=>a.date<b.date?1:-1).forEach(s=>saleRows.push([c.name, s.receiptNo||'-', fmtDate(s.date), saleItems(s).map(it=>it.crop).join('; ')||'-', saleTrayEqTotal(s), money(+s.total||0), s.payment||'-', s.location||'-']));
+    });
+    /* the email column and receipt-level sales stay with the roles that run the till */
+    const dirHead = ['Client','Phone','Email','Region (ward · county)','Location','Crops of interest','Leads','Purchases · trays','Spend','Last contact'];
+    const dirRows = seesSales ? rows : rows.map(r=>r.filter((_,i)=>i!==2));
+    const sections = [
+      {heading:'Client directory (every customer and farmer lead)', head: seesSales ? dirHead : dirHead.filter((_,i)=>i!==2), rows: dirRows.length? dirRows : [['-','-','-','-','No leads or sales recorded yet','-','-','-','-']]},
+      {heading:'Farmer leads by client', head:['Client','Phone','Location','Interest / order','Status','Assigned to','Follow-up','Captured','GPS'], rows: leadRows.length? leadRows : [['-','-','-','No leads captured yet','-','-','-','-','-']]},
+    ];
+    if(seesSales) sections.push({heading:'Cash sales by client', head:['Client','Receipt','Date','Items','Trays','Total','Payment','Location'], rows: saleRows.length? saleRows : [['-','-','-','No cash sales recorded yet','-','-','-','-']]});
+    return { title:'Clients & Leads Directory', subtitle:stamp+(CURRENT.role==='Sales'? ' · your own leads and sales' : ''), landscape:true,
+      sections,
+      summary:[['Clients and leads', dir.length], ['With a phone number', dir.filter(c=>c.phones.size).length], ['Region resolved from GPS', dir.filter(c=>c.region).length], ['Farmer leads', leadRows.length], ['Cash sales', saleRows.length], ['Total spend', money(dir.reduce((a,c)=>a+c.spend,0))], ['Tray basis', trayBasisNote()]] };
   }
   if(key==='pettycash'){
     const pcRows = dailyExpenseRowsSorted();
