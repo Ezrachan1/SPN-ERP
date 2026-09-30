@@ -424,6 +424,16 @@ table:not(.dtable) tbody tr:hover{background:var(--mint-soft);}
 }
 .field input:focus,.field select:focus,.field textarea:focus{outline:none;border-color:var(--sage);box-shadow:0 0 0 3px rgba(111,155,98,.14);}
 .field input[readonly]{background:var(--surface-soft);color:var(--muted);}
+/* message recipients: chips with a type-ahead box */
+.rcpt-box{display:flex;flex-wrap:wrap;gap:6px;align-items:center;min-height:40px;padding:5px 8px;border:1px solid var(--line);border-radius:8px;background:var(--surface);cursor:text;}
+.rcpt-box:focus-within{border-color:var(--sage);box-shadow:0 0 0 3px rgba(111,155,98,.14);}
+.field .rcpt-box input{flex:1;min-width:150px;border:none;box-shadow:none;padding:4px 2px;background:transparent;}
+.field .rcpt-box input:focus{box-shadow:none;}
+.rcpt-chip{display:inline-flex;align-items:center;gap:2px;padding:3px 3px 3px 10px;border-radius:16px;background:var(--mint);color:var(--txt-green);font-size:12px;font-weight:600;max-width:100%;}
+.rcpt-chip button{border:none;background:transparent;cursor:pointer;font-size:15px;line-height:1;color:inherit;padding:0 5px;opacity:.75;}
+.rcpt-chip button:hover{opacity:1;}
+.rcpt-links{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;margin-top:4px;}
+.rcpt-links a{color:var(--forest);cursor:pointer;text-decoration:underline;}
 .field-full{grid-column:1/-1;}
 .checkline{display:flex;align-items:center;gap:7px;font-size:12.2px;}
 
@@ -2089,7 +2099,7 @@ async function applyServerState(st){
       SYNC_BASE[k] = syncHash(sj); SYNC_SNAPSHOT[k] = sj; UNSAFE_BASE.delete(k); persistSyncBase(k); store.set(snapKey(k), sj);
     } else { DATA[k] = sv; setSynced(k, sj); }
   });
-  const su = Array.isArray(st.users) ? st.users : [];
+  const su = Array.isArray(st.users) ? stripLegacyDashes(st.users) : [];
   const uj = JSON.stringify(su);
   if(usersDirty()){
     DATA.users = mergeOffline('users', parseSnap('__users'), DATA.users, su);
@@ -2269,16 +2279,21 @@ function openChangePasswordModal(force){
 /* modules that arrived after most accounts were created, granted by rule rather than per
    user. Derived, never saved: a server copy of the account does not carry them, so this
    runs again every time CURRENT is re-read from one. */
+function impliedAccessFor(u){
+  const a = ((u && u.access) || []).slice();
+  const grant = k => { if(!a.includes(k)) a.push(k); };
+  if(a.includes('sowing')) grant('seedinventory');
+  if(a.includes('procurement')) grant('suppliers');
+  /* petty cash: finance, admins and anyone who runs the till */
+  if(u && (u.role==='Finance' || u.role==='Admin' || u.role==='SuperUser' || a.includes('cashsale'))) grant('dailyexpenses');
+  grant('messages');
+  return a;
+}
 function applyImpliedAccess(){
   if(!CURRENT) return;
   const usersBefore = JSON.stringify(DATA.users);
   CURRENT.access = CURRENT.access || [];
-  const grant = k => { if(!CURRENT.access.includes(k)) CURRENT.access.push(k); };
-  if(CURRENT.access.includes('sowing')) grant('seedinventory');
-  if(CURRENT.access.includes('procurement')) grant('suppliers');
-  /* petty cash: finance, admins and anyone who runs the till */
-  if(CURRENT.role==='Finance' || CURRENT.role==='Admin' || CURRENT.role==='SuperUser' || CURRENT.access.includes('cashsale')) grant('dailyexpenses');
-  grant('messages');
+  impliedAccessFor(CURRENT).forEach(k=>{ if(!CURRENT.access.includes(k)) CURRENT.access.push(k); });
   /* a derived change, not an edit: it must not leave the users collection "unsynced",
      which would hold back every background pull on this device */
   if(SYNC_BASE.__users && SYNC_BASE.__users===syncHash(usersBefore)) setSynced('__users', JSON.stringify(DATA.users));
@@ -6164,11 +6179,14 @@ const MESSAGE_BODY_MAX = 4000, MESSAGE_SUBJECT_MAX = 150;
 /* ids of messages sent from this device that the server has not confirmed yet */
 function pendingMessageIds(){ try{ const v = JSON.parse(localStorage.getItem('spn_msg_pending')||'[]'); return new Set(Array.isArray(v)? v : []); }catch(e){ return new Set(); } }
 function setPendingMessageIds(set){ try{ localStorage.setItem('spn_msg_pending', JSON.stringify([...set].slice(-500))); }catch(e){} }
+/* stashed drafts open one at a time: the next one follows when this form closes */
 function openStashedMessageDraft(uid){
-  let d = null; try{ d = JSON.parse(localStorage.getItem('spn_msg_draft_'+uid)||'null'); }catch(e){}
-  if(!d) return;
-  try{ localStorage.removeItem('spn_msg_draft_'+uid); }catch(e){}
-  try{ openComposeMessageModal(null, d); }catch(err){ console.error(err); }
+  const key = 'spn_msg_draft_'+uid;
+  let list = []; try{ const v = JSON.parse(localStorage.getItem(key)||'null'); list = Array.isArray(v)? v : (v? [v] : []); }catch(e){}
+  if(!list.length) return;
+  const d = list.shift();
+  try{ if(list.length) localStorage.setItem(key, JSON.stringify(list)); else localStorage.removeItem(key); }catch(e){}
+  try{ openComposeMessageModal(null, d, {afterClose: list.length? ()=>setTimeout(()=>{ if(CURRENT && CURRENT.id===uid) openStashedMessageDraft(uid); }, 300) : null}); }catch(err){ console.error(err); }
 }
 function handleFullMessageStore(e){
   let sent = []; try{ sent = JSON.parse(e.sentJson||'[]'); }catch(_){}
@@ -6176,8 +6194,17 @@ function handleFullMessageStore(e){
   const refused = new Set(sent.filter(m=>m && pending.has(m.id)).map(m=>m.id));
   const unsent = (DATA.messages||[]).filter(m=>m && refused.has(m.id));
   /* kept for its author first, so nothing below can lose what was typed */
-  const draft = unsent.length ? {fromId: unsent[0].fromId, toId: unsent[0].toId, toName: unsent[0].toName, subject: unsent[0].subject==='(no subject)'? '' : unsent[0].subject, body: unsent[0].body} : null;
-  if(draft){ try{ localStorage.setItem('spn_msg_draft_'+draft.fromId, JSON.stringify(draft)); }catch(_){} }
+  /* one draft per refused send, kept for its author before anything below can fail */
+  const groups = new Map();
+  unsent.forEach(m=>{ const k = messageBatchKey(m); if(!groups.has(k)) groups.set(k, []); groups.get(k).push(m); });
+  const drafts = [...groups.values()].map(rows=>{ const f0 = rows[0], ids = k=>rows.filter(m=>messageKind(m)===k).map(m=>m.toId);
+    return {fromId:f0.fromId, toIds:ids('to'), ccIds:ids('cc'), bccIds:ids('bcc'), toName: rows.length>1? rows.length+' people' : f0.toName, subject: f0.subject==='(no subject)'? '' : f0.subject, body: f0.body}; });
+  const draft = drafts[0] || null;
+  if(draft){
+    const key = 'spn_msg_draft_'+draft.fromId; let prev = [];
+    try{ const v = JSON.parse(localStorage.getItem(key)||'null'); prev = Array.isArray(v)? v : (v? [v] : []); }catch(_){}
+    try{ localStorage.setItem(key, JSON.stringify(prev.concat(drafts))); }catch(_){}
+  }
   if(refused.size){
     DATA.messages = (DATA.messages||[]).filter(m=>!(m && refused.has(m.id)));
     refused.forEach(id=>pending.delete(id)); setPendingMessageIds(pending);
@@ -6192,7 +6219,7 @@ function handleFullMessageStore(e){
   const vr = document.getElementById('view-root');
   if(CURRENT && vr && vr.dataset.view==='messages') renderMessages(vr); /* also runs during a sign-in push, before anyone is signed in */
   if(draft){
-    toast('Your message to '+(draft.toName||'a colleague')+' was not sent: the shared message store is full. Delete older messages, then send it again from the draft.','err');
+    toast((drafts.length===1? 'Your message to '+(draft.toName||'a colleague')+' was' : drafts.length+' messages ('+drafts.map(d=>d.toName||'a colleague').join('; ')+') were')+' not sent: the shared message store is full. Delete older messages, then send '+(drafts.length===1? 'it' : 'them')+' again from the draft'+(drafts.length===1? '' : 's')+'.','err');
     if(CURRENT && CURRENT.id===draft.fromId) openStashedMessageDraft(CURRENT.id);
   } else toast('The shared message store is full; older messages must be deleted before new ones can be sent.','err');
 }
@@ -6205,114 +6232,300 @@ function timeAgo(ts){
   const days = Math.round(hrs/24); if(days<30) return days+'d ago';
   return fmtDate(isoDate(new Date(ts)));
 }
+/* ---- several recipients, Cc and Bcc ----
+   One row is still stored per recipient (the server keeps each person's mail in their own
+   view), and the rows of one send share a batchId. Each row carries the visible To and Cc
+   lists so every recipient sees who else received it. Bcc names are never written into
+   anyone's row except that Bcc recipient's own; the sender sees them through the rows
+   addressed to them, which only the sender and that recipient hold. */
+const MESSAGE_MAX_RECIPIENTS = 50;
+const MESSAGE_LIST_SHOWN = 12;
+function messageBatchKey(m){ return (m && (m.batchId || m.id)) || ''; }
+const messageKind = m => (m && (m.kind==='cc' || m.kind==='bcc')) ? m.kind : 'to';
+function sentMessageGroups(){
+  const groups = new Map();
+  sentMessages().forEach(m=>{ const k = messageBatchKey(m); if(!groups.has(k)) groups.set(k, []); groups.get(k).push(m); });
+  return [...groups.entries()].map(([key, rows])=>{
+    const first = rows[0];
+    return {id:key, key, rows, subject:first.subject, body:first.body, ts:Math.max(...rows.map(r=>+r.ts||0)),
+      to: rows.filter(r=>messageKind(r)==='to'), cc: rows.filter(r=>messageKind(r)==='cc'), bcc: rows.filter(r=>messageKind(r)==='bcc'),
+      readCount: rows.filter(r=>r.read).length};
+  }).sort((a,b)=>b.ts-a.ts);
+}
+function recipientSummary(g){
+  const names = rows => rows.map(r=>r.toName||'-');
+  const short = list => list.slice(0,3).join(', ') + (list.length>3? ' +'+(list.length-3) : '');
+  let s = g.to.length ? short(names(g.to)) : (g.cc.length ? 'Cc: '+short(names(g.cc)) : 'Bcc only');
+  if(g.to.length && g.cc.length) s += ' · Cc '+g.cc.length;
+  if(g.bcc.length && (g.to.length || g.cc.length)) s += ' · Bcc '+g.bcc.length;
+  return s;
+}
+function sentReadStatus(g){
+  if(g.rows.length===1) return g.readCount? st('green','Read') : st('slate','Unread');
+  return g.readCount===g.rows.length ? st('green','Read by all') : st(g.readCount? 'blue' : 'slate', 'Read '+g.readCount+'/'+g.rows.length);
+}
+/* everyone else on the message, for Reply all (never the Bcc recipients) */
+function replyAllRecipients(m){
+  const me = CURRENT.id, active = new Set(messageableUsers().map(u=>u.id));
+  const to = [m.fromId, ...(m.toList||[]).map(x=>x.id)].filter((id,i,a)=>id && id!==me && active.has(id) && a.indexOf(id)===i);
+  const cc = (m.ccList||[]).map(x=>x.id).filter((id,i,a)=>id && id!==me && active.has(id) && !to.includes(id) && a.indexOf(id)===i);
+  return {to, cc};
+}
+function canReplyAll(m){ if(!m || messageKind(m)==='bcc') return false; const r = replyAllRecipients(m); return r.to.length + r.cc.length > 1; }
 function renderMessages(root){
   const purged = purgeOldMessages();
   if(purged) saveData();
-  const inbox = inboxMessages(), sent = sentMessages();
+  const inbox = inboxMessages(), groups = sentMessageGroups();
   const unread = inbox.filter(m=>!m.read).length;
-  const rows = messagesTab==='inbox' ? inbox : sent;
+  const kindChip = m => messageKind(m)==='cc' ? ' '+st('slate','Cc') : (messageKind(m)==='bcc' ? ' '+st('slate','Bcc') : '');
   root.innerHTML = `
-  <div class="view-header"><div><h2>Messages</h2><p>Write to any colleague signed into SPN OS. Messages are kept for ${MESSAGE_RETENTION_DAYS} days and then deleted automatically.</p></div>
+  <div class="view-header"><div><h2>Messages</h2><p>Write to one colleague or several (with Cc and Bcc) signed into SPN OS. Messages are kept for ${MESSAGE_RETENTION_DAYS} days and then deleted automatically.</p></div>
   <button class="btn" onclick="openComposeMessageModal()">+ New message</button></div>
   <div class="grid cols-3" style="margin-bottom:16px;">
     ${kpi('Unread', unread, unread? 'in your inbox' : 'all caught up', 'mail', unread?'warn':'')}
     ${kpi('Received', inbox.length, 'total in your inbox', 'mail')}
-    ${kpi('Sent', sent.length, 'from you', 'mail')}
+    ${kpi('Sent', groups.length, 'from you', 'mail')}
   </div>
   <div class="tabs" style="margin-bottom:4px;">
     <div class="tab ${messagesTab==='inbox'?'active':''}" onclick="messagesTab='inbox';renderMessages(document.getElementById('view-root'))">Inbox${unread? ' · '+unread : ''}</div>
     <div class="tab ${messagesTab==='sent'?'active':''}" onclick="messagesTab='sent';renderMessages(document.getElementById('view-root'))">Sent</div>
   </div>
-  ${dataTable('messages', {
+  ${messagesTab==='inbox' ? dataTable('messages', {
     searchLabel:'messages',
-    rows: rows,
+    rows: inbox,
     onRowClick:'openMessageDrawer',
-    emptyTitle: messagesTab==='inbox'? 'No messages received' : 'No messages sent',
-    emptyText: messagesTab==='inbox'? 'Messages colleagues send you appear here.' : 'Start a conversation with "+ New message" above.',
-    columns: messagesTab==='inbox' ? [
+    emptyTitle:'No messages received', emptyText:'Messages colleagues send you appear here.',
+    columns: [
       {key:'from', label:'From', val:m=>m.fromName, html:m=>`<div class="cell-main" style="${m.read?'':'font-weight:700;'}">${esc(m.fromName)}</div>`},
-      {key:'subject', label:'Subject', val:m=>m.subject, html:m=>`<span style="${m.read?'':'font-weight:700;'}">${esc(m.subject||'(no subject)')}</span>`},
+      {key:'subject', label:'Subject', val:m=>m.subject, html:m=>`<span style="${m.read?'':'font-weight:700;'}">${esc(m.subject||'(no subject)')}</span>${kindChip(m)}`},
       {key:'preview', label:'Message', sortable:false, val:m=>m.body, html:m=>`<span class="small-muted">${esc((m.body||'').slice(0,80))}${(m.body||'').length>80?'…':''}</span>`},
       {key:'ts', label:'Received', val:m=>m.ts, html:m=>timeAgo(m.ts)},
       {key:'status', label:'', sortable:false, val:m=>m.read?'':'unread', html:m=>m.read?'':st('blue','New')},
-    ] : [
-      {key:'to', label:'To', val:m=>m.toName, html:m=>`<div class="cell-main">${esc(m.toName)}</div>`},
-      {key:'subject', label:'Subject', val:m=>m.subject, html:m=>esc(m.subject||'(no subject)')},
-      {key:'preview', label:'Message', sortable:false, val:m=>m.body, html:m=>`<span class="small-muted">${esc((m.body||'').slice(0,80))}${(m.body||'').length>80?'…':''}</span>`},
-      {key:'ts', label:'Sent', val:m=>m.ts, html:m=>timeAgo(m.ts)},
-      {key:'status', label:'', sortable:false, val:m=>m.read?'read':'', html:m=>m.read?st('green','Read'):st('slate','Unread')},
     ],
     rowMenu: m=>[
       {label:'Open', run:()=>openMessageDrawer(m.id)},
-      messagesTab==='inbox'? {label:'Reply', run:()=>openComposeMessageModal(m)} : null,
+      {label:'Reply', run:()=>openComposeMessageModal(m)},
+      canReplyAll(m)? {label:'Reply all', run:()=>openComposeMessageModal(m, null, {replyAll:true})} : null,
       {label:'Delete', danger:true, run:()=>deleteMessage(m.id)},
     ],
+  }) : dataTable('messages-sent', {
+    searchLabel:'sent messages',
+    rows: groups,
+    onRowClick:'openSentMessageDrawer',
+    emptyTitle:'No messages sent', emptyText:'Start a conversation with "+ New message" above.',
+    columns: [
+      {key:'to', label:'To', val:g=>g.rows.map(r=>r.toName).join(' '), html:g=>`<div class="cell-main">${esc(recipientSummary(g))}</div>`},
+      {key:'subject', label:'Subject', val:g=>g.subject, html:g=>esc(g.subject||'(no subject)')},
+      {key:'preview', label:'Message', sortable:false, val:g=>g.body, html:g=>`<span class="small-muted">${esc((g.body||'').slice(0,80))}${(g.body||'').length>80?'…':''}</span>`},
+      {key:'ts', label:'Sent', val:g=>g.ts, html:g=>timeAgo(g.ts)},
+      {key:'status', label:'', sortable:false, val:g=>g.readCount, html:g=>sentReadStatus(g)},
+    ],
+    rowMenu: g=>[
+      {label:'Open', run:()=>openSentMessageDrawer(g.key)},
+      {label:'Delete', danger:true, run:()=>deleteSentMessage(g.key)},
+    ],
   })}
-  <div class="disclaimer">Internal messages only - not SMS, WhatsApp or email. Every message (read or unread, inbox or sent) is permanently deleted ${MESSAGE_RETENTION_DAYS} days after it was sent, so keep anything you need to retain elsewhere.</div>
+  <div class="disclaimer">Internal messages only - not SMS, WhatsApp or email. Every message (read or unread, inbox or sent) is permanently deleted ${MESSAGE_RETENTION_DAYS} days after it was sent, so keep anything you need to retain elsewhere. Bcc recipients are hidden from everyone except you.</div>
   `;
 }
-function openComposeMessageModal(replyTo, draft){
+/* ---- recipient pickers in the compose form ---- */
+let MSG_PICK = {to:[], cc:[], bcc:[]};
+/* the label a colleague is picked by: name and role, made unique where two people share them */
+function msgUserLabels(){
+  const users = messageableUsers(), base = u => u.name+' · '+(u.designation || u.role), n = {};
+  users.forEach(u=>{ const b = base(u); n[b] = (n[b]||0)+1; });
+  const m = new Map();
+  users.forEach(u=>{ const b = base(u); m.set(u.id, n[b]>1? b+(u.department? ' · '+u.department : '')+' · #'+String(u.id).slice(-4) : b); });
+  return m;
+}
+const msgUserLabel = u => msgUserLabels().get(u.id) || (u.name+' · '+u.role);
+function msgPickerHTML(field, label, required){
+  return `<div class="field field-full" id="msg-${field}-field"><label>${label}${required? ' <span class="req">*</span>' : ''}</label>
+    <div class="rcpt-box" onclick="document.getElementById('msg-${field}-input').focus()"><span id="msg-${field}-chips" style="display:contents;"></span><input id="msg-${field}-input" list="msg-user-list" autocomplete="off" placeholder="Type a name…" onchange="msgPickFromInput('${field}')" onkeydown="if(event.key==='Enter'){event.preventDefault();msgPickFromInput('${field}');}else if(event.key==='Backspace' && !this.value){msgRemoveLast('${field}');}"></div></div>`;
+}
+function msgRenderChips(){
+  ['to','cc','bcc'].forEach(field=>{
+    const el = document.getElementById('msg-'+field+'-chips'); if(!el) return;
+    const L = msgUserLabels(), twin = u => u && messageableUsers().filter(x=>x.name===u.name).length>1;
+    el.innerHTML = MSG_PICK[field].map(id=>{ const u = DATA.users.find(x=>x.id===id); return `<span class="rcpt-chip">${esc(u? (twin(u)? (L.get(u.id)||u.name) : u.name) : id)}<button type="button" title="Remove" aria-label="Remove ${esc(u? u.name : '')}" onclick="event.stopPropagation();msgRemoveRecipient(${jsArg(field)},${jsArg(id)})">×</button></span>`; }).join('');
+  });
+  const n = MSG_PICK.to.length + MSG_PICK.cc.length + MSG_PICK.bcc.length;
+  const c = document.getElementById('msg-rcpt-count'); if(c) c.textContent = n? n+' recipient'+(n===1?'':'s') : '';
+}
+function msgAddRecipient(field, id){
+  if(!messageableUsers().some(u=>u.id===id)) return false;
+  ['to','cc','bcc'].forEach(k=>{ MSG_PICK[k] = MSG_PICK[k].filter(x=>x!==id); });
+  if(MSG_PICK.to.length + MSG_PICK.cc.length + MSG_PICK.bcc.length >= MESSAGE_MAX_RECIPIENTS){ toast('A message can go to at most '+MESSAGE_MAX_RECIPIENTS+' people.','err'); return false; }
+  MSG_PICK[field].push(id);
+  return true;
+}
+/* true when the typed name became a recipient (or the box was empty); a name that does not
+   resolve to exactly one colleague stays in the box, so it cannot be silently left off */
+function msgPickFromInput(field){
+  const inp = document.getElementById('msg-'+field+'-input'); if(!inp) return true;
+  const v = inp.value.trim(); if(!v) return true;
   const users = messageableUsers();
-  const presetTo = replyTo? replyTo.fromId : (draft && draft.toId) || '';
-  /* a reply never falls through to the first name on the list */
-  if(replyTo && !users.some(u=>u.id===presetTo)){ toast((replyTo.fromName||'That sender')+' is no longer an active user, so the reply cannot be sent.','err'); return; }
+  const lc = v.toLowerCase(), L = msgUserLabels();
+  const exact = users.filter(u=>L.get(u.id)===v), byName = users.filter(u=>u.name.toLowerCase()===lc), bySub = users.filter(u=>u.name.toLowerCase().includes(lc));
+  const hit = exact.length===1 ? exact[0] : (exact.length>1 ? null : (byName.length===1 ? byName[0] : (byName.length===0 && bySub.length===1 ? bySub[0] : null)));
+  if(!hit){ toast('No single active colleague matches "'+v+'". Pick the exact name from the list.','err'); inp.focus(); return false; }
+  if(!msgAddRecipient(field, hit.id)){ inp.focus(); return false; }
+  inp.value = ''; msgRenderChips(); inp.focus();
+  return true;
+}
+function msgRemoveRecipient(field, id){ MSG_PICK[field] = MSG_PICK[field].filter(x=>x!==id); msgRenderChips(); }
+function msgRemoveLast(field){ if(MSG_PICK[field].length){ MSG_PICK[field].pop(); msgRenderChips(); } }
+function msgAddEveryone(field){
+  const label = ({to:'To', cc:'Cc', bcc:'Bcc'})[field];
+  const picked = new Set([...MSG_PICK.to, ...MSG_PICK.cc, ...MSG_PICK.bcc]);
+  const remaining = messageableUsers().filter(u=>!picked.has(u.id));
+  if(!remaining.length){ toast('Everyone is already on this message.'); return; }
+  const take = remaining.slice(0, Math.max(0, MESSAGE_MAX_RECIPIENTS - picked.size));
+  take.forEach(u=>MSG_PICK[field].push(u.id));
+  msgRenderChips();
+  if(take.length < remaining.length) toast('Added '+take.length+' of '+remaining.length+' colleagues to '+label+'. A message can go to at most '+MESSAGE_MAX_RECIPIENTS+' people, so '+(remaining.length-take.length)+' were left out.','err');
+  else toast('Added '+take.length+' colleague'+(take.length===1?'':'s')+' to '+label+'.');
+}
+function msgShowCopies(){ ['cc','bcc'].forEach(k=>{ const el = document.getElementById('msg-'+k+'-field'); if(el) el.style.display=''; }); const l = document.getElementById('msg-cc-link'); if(l) l.style.display='none'; }
+function openComposeMessageModal(replyTo, draft, opts){
+  const users = messageableUsers();
+  const o = opts || {};
+  /* a reply never falls through to someone else */
+  if(replyTo && !users.some(u=>u.id===replyTo.fromId)){ toast((replyTo.fromName||'That sender')+' is no longer an active user, so the reply cannot be sent.','err'); return; }
+  if(replyTo){
+    const ra = o.replyAll ? replyAllRecipients(replyTo) : {to:[replyTo.fromId], cc:[]};
+    MSG_PICK = {to: ra.to, cc: ra.cc, bcc: []};
+  } else if(draft){
+    const keep = ids => (ids||[]).filter(id=>users.some(u=>u.id===id));
+    MSG_PICK = {to: keep(draft.toIds || (draft.toId? [draft.toId] : [])), cc: keep(draft.ccIds), bcc: keep(draft.bccIds)};
+  } else MSG_PICK = {to:[], cc:[], bcc:[]};
+  const showCopies = MSG_PICK.cc.length || MSG_PICK.bcc.length;
   /* only the message being answered is quoted, trimmed, without the quotes it carried */
   const quote = replyTo? String(replyTo.body||'').split('\n').filter(l=>!/^\s*>/.test(l) && !/^- On .* wrote:$/.test(l)).join('\n').trim() : '';
   const quoted = quote.length>300? quote.slice(0,300).trim()+'…' : quote;
-  openModal(replyTo? 'Reply' : 'New message', `
+  openModal(replyTo? (o.replyAll? 'Reply all' : 'Reply') : 'New message', `
+    <datalist id="msg-user-list">${(()=>{ const L = msgUserLabels(); return users.map(u=>`<option value="${esc(L.get(u.id))}">`).join(''); })()}</datalist>
     <div class="form-grid">
-      <div class="field field-full"><label>To <span class="req">*</span></label><select id="msg-to" ${replyTo?'disabled':''}>${replyTo? '' : '<option value="">Choose a recipient…</option>'}${users.map(u=>`<option value="${esc(u.id)}" ${presetTo===u.id?'selected':''}>${esc(u.name)} · ${esc(u.role)}</option>`).join('')}</select>${users.length? '' : '<small class="small-muted">No other active users yet.</small>'}</div>
+      ${msgPickerHTML('to', 'To', true)}
+      <div class="field-full rcpt-links" style="margin-top:-6px;">
+        <a id="msg-cc-link" onclick="msgShowCopies()" ${showCopies? 'style="display:none;"' : ''}>Add Cc / Bcc</a>
+        <a onclick="msgAddEveryone('to')">Add everyone</a>
+        <span class="small-muted" id="msg-rcpt-count"></span>
+      </div>
+      <div style="display:contents;">${msgPickerHTML('cc', 'Cc', false)}${msgPickerHTML('bcc', 'Bcc <span class="small-muted">(hidden from the other recipients)</span>', false)}</div>
       <div class="field field-full"><label>Subject</label><input id="msg-subject" maxlength="${MESSAGE_SUBJECT_MAX}" value="${replyTo? esc(((/^Re: /i.test(replyTo.subject||'')?'':'Re: ')+(replyTo.subject||'')).slice(0,MESSAGE_SUBJECT_MAX)) : (draft? esc(String(draft.subject||'').slice(0,MESSAGE_SUBJECT_MAX)) : '')}" placeholder="e.g. Bay 3 batch update"></div>
       <div class="field field-full"><label>Message <span class="req">*</span> <span class="small-muted">(up to ${MESSAGE_BODY_MAX.toLocaleString()} characters)</span></label><textarea id="msg-body" rows="5" maxlength="${MESSAGE_BODY_MAX}" placeholder="Write your message…">${replyTo && quoted? '\n\n- On '+fmtDate(isoDate(new Date(replyTo.ts)))+', '+esc(replyTo.fromName)+' wrote:\n'+esc(quoted).split('\n').map(l=>'> '+l).join('\n') : (draft? esc(draft.body||'') : '')}</textarea></div>
     </div>
   `, [
-    {label:'Cancel', cls:'secondary', action:closeModal},
+    {label:'Cancel', cls:'secondary', action:()=>{ closeModal(); if(o.afterClose) o.afterClose(); }},
     {label:'Send', cls:'leaf', action:()=>{
-      const toId = document.getElementById('msg-to').value;
+      /* a name typed but not yet turned into a chip still counts; one that does not resolve
+         stops the send, so nobody intended is quietly left off */
+      if(!['to','cc','bcc'].every(k=>msgPickFromInput(k))) return;
       const body = document.getElementById('msg-body').value.trim();
-      if(!toId){ toast('Pick a recipient.','err'); return; }
+      if(!MSG_PICK.to.length && !MSG_PICK.cc.length && !MSG_PICK.bcc.length){ toast('Add at least one recipient.','err'); return; }
       if(!body){ toast('Write a message before sending.','err'); return; }
       if(body.length > MESSAGE_BODY_MAX){ toast('Messages are limited to '+MESSAGE_BODY_MAX.toLocaleString()+' characters; shorten it or split it in two.','err'); return; }
-      sendMessage(toId, document.getElementById('msg-subject').value.trim().slice(0,MESSAGE_SUBJECT_MAX), body);
-      closeModal();
+      if(sendMessage({to:MSG_PICK.to.slice(), cc:MSG_PICK.cc.slice(), bcc:MSG_PICK.bcc.slice()}, document.getElementById('msg-subject').value.trim().slice(0,MESSAGE_SUBJECT_MAX), body)){ closeModal(); if(o.afterClose) o.afterClose(); }
     }}
   ], {wide:true});
+  if(!showCopies) ['cc','bcc'].forEach(k=>{ const el = document.getElementById('msg-'+k+'-field'); if(el) el.style.display='none'; });
+  msgRenderChips();
 }
-function sendMessage(toId, subject, body){
-  const to = DATA.users.find(u=>u.id===toId);
-  if(!to){ toast('Recipient not found.','err'); return; }
-  if(!isActiveUser(to)){ toast(to.name+' is no longer an active user.','err'); return; }
+/* recipients: a user id (one person) or {to:[ids], cc:[ids], bcc:[ids]}. Returns true when sent. */
+function sendMessage(recipients, subject, body){
+  const r = typeof recipients==='string' ? {to:[recipients], cc:[], bcc:[]} : (recipients||{});
+  const find = ids => [...new Set(ids||[])].map(id=>DATA.users.find(u=>u.id===id)).filter(u=>u && u.id!==CURRENT.id);
+  const to = find(r.to), cc = find(r.cc).filter(u=>!to.includes(u)), bcc = find(r.bcc).filter(u=>!to.includes(u) && !cc.includes(u));
+  const all = [...to, ...cc, ...bcc];
+  if(!all.length){ toast('Recipient not found.','err'); return false; }
+  const gone = all.filter(u=>!isActiveUser(u));
+  if(gone.length){ toast(gone.map(u=>u.name).join(', ')+(gone.length===1? ' is' : ' are')+' no longer an active user.','err'); return false; }
+  if(all.length > MESSAGE_MAX_RECIPIENTS){ toast('A message can go to at most '+MESSAGE_MAX_RECIPIENTS+' people.','err'); return false; }
+  const ts = Date.now();
   DATA.messages = DATA.messages || [];
-  const mid = uid('msg');
-  DATA.messages.push({id:mid, fromId:CURRENT.id, fromName:CURRENT.name, toId:to.id, toName:to.name, subject: subject||'(no subject)', body, ts:Date.now(), read:false});
-  const pend = pendingMessageIds(); pend.add(mid); setPendingMessageIds(pend);
+  const multi = all.length>1 || cc.length || bcc.length;
+  const batchId = multi ? uid('mb') : null;
+  /* each copy lists at most MESSAGE_LIST_SHOWN names per line ("and N others" beyond), so a
+     big send does not store every name on every copy; the server applies the same cap */
+  const list = us => us.slice(0, MESSAGE_LIST_SHOWN).map(u=>({id:u.id, name:String(u.name||'').slice(0,120)}));
+  const toList = list(to), ccList = list(cc);
+  const toMore = Math.max(0, to.length - MESSAGE_LIST_SHOWN), ccMore = Math.max(0, cc.length - MESSAGE_LIST_SHOWN);
+  /* every recipient keeps their own copy in one shared store: keep a single send in proportion */
+  const sample = {id:'msg_xxxxxxx', fromId:CURRENT.id, fromName:CURRENT.name, toId:'u_xxxxxxx', toName:'x'.repeat(40), subject: subject||'(no subject)', body, ts, read:false};
+  if(multi) Object.assign(sample, {batchId:'mb_xxxxxxx', kind:'bcc', toList, ccList, toMore, ccMore});
+  if(JSON.stringify(sample).length * all.length > 250000){ toast('That message is too long to send to '+all.length+' people at once. Shorten it, or send it to fewer people.','err'); return false; }
+  const pend = pendingMessageIds();
+  const add = (u, kind)=>{
+    const mid = uid('msg');
+    /* field order matches the server's copy, so the synced copies compare equal */
+    const row = {id:mid, fromId:CURRENT.id, fromName:CURRENT.name, toId:u.id, toName:u.name, subject: subject||'(no subject)', body, ts, read:false};
+    if(multi){ row.batchId = batchId; row.kind = kind; row.toList = toList; row.ccList = ccList; if(toMore) row.toMore = toMore; if(ccMore) row.ccMore = ccMore; }
+    DATA.messages.push(row); pend.add(mid);
+  };
+  to.forEach(u=>add(u,'to')); cc.forEach(u=>add(u,'cc')); bcc.forEach(u=>add(u,'bcc'));
+  setPendingMessageIds(pend);
   /* the audit log is visible to everyone: it records that a message was sent, not to whom or about what */
   logActivity(`${CURRENT.name} sent a message.`);
   saveData();
   if(document.getElementById('view-root').dataset.view==='messages') renderMessages(document.getElementById('view-root'));
   updateBell();
-  toast('Message sent to '+to.name+'.');
+  toast(all.length===1? 'Message sent to '+all[0].name+'.' : 'Message sent to '+all.length+' people.');
+  return true;
+}
+function messageListsHTML(m){
+  if(!m.batchId && !m.toList && !m.ccList) return '';
+  const names = (l, more) => (l||[]).map(x=>esc(x.name||'-')).join(', ') + ((+more||0)>0? ' and '+(+more)+' other'+(+more===1?'':'s') : '');
+  return `<div class="small-muted" style="margin:-4px 0 10px;line-height:1.6;">${(m.toList||[]).length? '<div>To: '+names(m.toList, m.toMore)+'</div>' : ''}${(m.ccList||[]).length? '<div>Cc: '+names(m.ccList, m.ccMore)+'</div>' : ''}${messageKind(m)==='bcc'? '<div><i>You received a blind copy (Bcc): the other recipients cannot see that you got it.</i></div>' : ''}</div>`;
 }
 function openMessageDrawer(id){
   const m = (DATA.messages||[]).find(x=>x.id===id);
   if(!m) return;
   const isRecipient = m.toId===CURRENT.id;
+  if(!isRecipient && m.fromId===CURRENT.id){ openSentMessageDrawer(messageBatchKey(m)); return; }
   if(isRecipient && !m.read){ m.read = true; saveData(); updateBell(); }
-  openDrawer(esc(m.subject||'(no subject)'), (isRecipient? 'From '+esc(m.fromName) : 'To '+esc(m.toName))+' · '+fmtDT(m.ts), `
-    <div class="small-muted" style="margin-bottom:10px;">${isRecipient? 'From' : 'To'} <b>${esc(isRecipient? m.fromName : m.toName)}</b> · ${fmtDT(m.ts)}</div>
+  openDrawer(esc(m.subject||'(no subject)'), 'From '+esc(m.fromName)+' · '+fmtDT(m.ts), `
+    <div class="small-muted" style="margin-bottom:10px;">From <b>${esc(m.fromName)}</b> · ${fmtDT(m.ts)}${messageKind(m)!=='to'? ' · '+st('slate', messageKind(m)==='cc'? 'Cc' : 'Bcc') : ''}</div>
+    ${messageListsHTML(m)}
     <div style="white-space:pre-wrap;font-size:13.5px;line-height:1.6;background:var(--mint-soft);border-radius:10px;padding:14px;">${esc(m.body||'')}</div>
   `, [
-    isRecipient? {label:'Reply', cls:'leaf', action:()=>{ closeDrawer(); openComposeMessageModal(m); }} : null,
+    {label:'Reply', cls:'leaf', action:()=>{ closeDrawer(); openComposeMessageModal(m); }},
+    canReplyAll(m)? {label:'Reply all', cls:'secondary', action:()=>{ closeDrawer(); openComposeMessageModal(m, null, {replyAll:true}); }} : null,
     {label:'Delete', cls:'rust', action:()=>{ closeDrawer(); deleteMessage(m.id); }},
     {label:'Close', cls:'secondary', action:closeDrawer},
   ].filter(Boolean));
+}
+function openSentMessageDrawer(key){
+  const g = sentMessageGroups().find(x=>x.key===key); if(!g) return;
+  const line = (label, rows) => rows.length? `<div style="margin-bottom:3px;"><b>${label}:</b> ${rows.map(r=>esc(r.toName||'-')+(r.read? ' <span title="Read" style="color:var(--forest);">✓</span>' : '')).join(', ')}</div>` : '';
+  openDrawer(esc(g.subject||'(no subject)'), 'Sent · '+fmtDT(g.ts), `
+    <div class="small-muted" style="margin-bottom:10px;line-height:1.6;">${line('To', g.to)}${line('Cc', g.cc)}${line('Bcc', g.bcc)}<div style="margin-top:4px;">${g.rows.length>1? 'Read by '+g.readCount+' of '+g.rows.length+' (✓ = read)' : (g.readCount? 'Read' : 'Not read yet')}</div></div>
+    <div style="white-space:pre-wrap;font-size:13.5px;line-height:1.6;background:var(--mint-soft);border-radius:10px;padding:14px;">${esc(g.body||'')}</div>
+  `, [
+    {label:'Delete', cls:'rust', action:()=>{ closeDrawer(); deleteSentMessage(g.key); }},
+    {label:'Close', cls:'secondary', action:closeDrawer},
+  ]);
 }
 function deleteMessage(id){
   const m = (DATA.messages||[]).find(x=>x.id===id);
   if(!m) return;
   if(!(isSuper() || m.fromId===CURRENT.id || m.toId===CURRENT.id)){ toast('You can only delete messages you sent or received.','err'); return; }
-  if(!confirm('Delete this message? This removes it for both sender and recipient.')) return;
+  if(m.fromId===CURRENT.id && m.toId!==CURRENT.id){ deleteSentMessage(messageBatchKey(m)); return; }
+  if(!confirm(m.batchId? 'Delete this message? It is removed from your inbox, and the sender no longer sees your copy.' : 'Delete this message? This removes it for both sender and recipient.')) return;
   DATA.messages = (DATA.messages||[]).filter(x=>x.id!==id);
+  logActivity(`${CURRENT.name} deleted a message.`);
+  saveData(); closeDrawer();
+  if(document.getElementById('view-root').dataset.view==='messages') renderMessages(document.getElementById('view-root'));
+  updateBell();
+  toast('Message deleted.');
+}
+/* the sender deleting a sent message removes every recipient's copy of it */
+function deleteSentMessage(key){
+  const rows = sentMessages().filter(m=>messageBatchKey(m)===key);
+  if(!rows.length) return;
+  if(!confirm(rows.length>1? 'Delete this message? It is removed for all '+rows.length+' recipients.' : 'Delete this message? This removes it for both sender and recipient.')) return;
+  const ids = new Set(rows.map(m=>m.id));
+  DATA.messages = (DATA.messages||[]).filter(x=>!ids.has(x.id));
   logActivity(`${CURRENT.name} deleted a message.`);
   saveData(); closeDrawer();
   if(document.getElementById('view-root').dataset.view==='messages') renderMessages(document.getElementById('view-root'));
@@ -10428,6 +10641,7 @@ function reportPreviewHTML(rep){
       <table style="width:auto;"><tbody>${rep.summary.map(([k,v])=>`<tr><td style="font-weight:600;padding:4px 18px 4px 0;">${esc(k)}</td><td style="padding:4px 0;">${esc(String(v))}</td></tr>`).join('')}</tbody></table>
     ` : ''}
     <div class="disclaimer" style="margin-top:20px;">Viewed by ${esc(CURRENT.name)} on ${esc(new Date().toLocaleString('en-KE'))}. Use Print or Download below - nothing is saved just from viewing.</div>
+    <div style="text-align:right;font-size:10.5px;color:var(--muted);opacity:.75;margin-top:10px;">Powered by Savlicon</div>
   </div>`;
 }
 function viewReport(key){
@@ -10712,13 +10926,18 @@ function renderAccess(root){
      colleague made from another device. Never while this device holds unsynced
      account edits, and never under an open dialog. The callback must not be named
      `st`: that shadows the status-chip helper for the whole re-render. */
-  if(SERVER_MODE && API.token && !OFFLINE && !SESSION_EXPIRED){
+  if(SERVER_MODE && API.token && !OFFLINE && !SESSION_EXPIRED && Date.now()-ACCESS_PULL_AT > 15000){
+    ACCESS_PULL_AT = Date.now();
     API.req('state').then(res=>{
       /* never swap the list out from under an open account panel: its draft is keyed
          to the record that was on screen when it opened */
       if(usersDirty() || document.getElementById('active-modal')) return;
       const fresh = stripLegacyDashes(res.users||[]);
-      if(!fresh.length || JSON.stringify(fresh)===JSON.stringify(DATA.users)) return;
+      /* this device's copy of the signed-in account also carries its rule-granted modules
+         (applyImpliedAccess): compare with those added, or every pull looks like a change,
+         re-renders the page and pulls again, without end */
+      const asHeld = fresh.map(u=>(CURRENT && u.id===CURRENT.id)? Object.assign({}, u, {access: impliedAccessFor(u)}) : u);
+      if(!fresh.length || JSON.stringify(asHeld)===JSON.stringify(DATA.users)) return;
       DATA.users = fresh;
       if(CURRENT) CURRENT = DATA.users.find(u=>u.id===CURRENT.id) || CURRENT;
       setSynced('__users', JSON.stringify(DATA.users));
@@ -10727,6 +10946,7 @@ function renderAccess(root){
     }).catch(()=>{});
   }
 }
+let ACCESS_PULL_AT = 0;
 async function approveRegistration(userId){
   if(!canManage()){ toast('Only Admin/MD or the Super User can approve registrations.','err'); return; }
   const u = DATA.users.find(x=>x.id===userId);
@@ -11985,31 +12205,45 @@ async function loadAppLink(elId){
   }catch(e){ el.innerHTML=''; }
 }
 /* Users & Access card: everyone with access sees the builds; only the Super User uploads */
+let RELEASES_AT = 0;
 async function loadReleasesCard(){
   const el = document.getElementById('releases-body'); if(!el) return;
   if(!SERVER_MODE){ el.innerHTML = '<span class="small-muted">App releases are managed on the deployed (Cloudflare) workspace.</span>'; return; }
-  let rel=[], storage='none';
-  try{ const r = await fetchReleases(true); rel = r.releases||[]; storage = r.storage||'none'; }
-  catch(e){ if(document.getElementById('releases-body')) document.getElementById('releases-body').innerHTML = '<span class="small-muted">Could not load releases'+(OFFLINE?' (offline)':'')+'.</span>'; return; }
+  if(RELEASES_CACHE) drawReleasesCard(RELEASES_CACHE);
+  if(RELEASES_CACHE && Date.now()-RELEASES_AT < 60000) return;
+  const shown = RELEASES_CACHE ? JSON.stringify(RELEASES_CACHE) : null;
+  try{ await fetchReleases(true); RELEASES_AT = Date.now(); }
+  catch(e){ if(!shown && document.getElementById('releases-body')) document.getElementById('releases-body').innerHTML = '<span class="small-muted">Could not load releases'+(OFFLINE?' (offline)':'')+'.</span>'; return; }
+  if(JSON.stringify(RELEASES_CACHE)!==shown) drawReleasesCard(RELEASES_CACHE);
+}
+function drawReleasesCard(r){
+  const rel = (r && r.releases) || [], storage = (r && r.storage) || 'none';
   const body = document.getElementById('releases-body'); if(!body) return;
-  body.innerHTML = `
-    ${isSuper()? `<div class="form-grid c3" style="margin-bottom:8px;">
+  /* the upload form is drawn once and kept, so a quiet refresh never wipes what is being
+     typed; only the list of builds below it is redrawn */
+  if(!document.getElementById('rel-list')){
+    body.innerHTML = `
+    ${isSuper()? `<div id="rel-form"><div class="form-grid c3" style="margin-bottom:8px;">
         <div class="field"><label>APK file</label><input type="file" id="rel-file" accept=".apk,application/vnd.android.package-archive"></div>
         <div class="field"><label>Version <span class="req">*</span></label><input id="rel-version" placeholder="e.g. 1.0.0"></div>
         <div class="field"><label>Release notes</label><input id="rel-notes" placeholder="What changed in this build"></div>
       </div>
       <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px;">
         <button class="btn sm leaf" id="rel-upload-btn" onclick="uploadRelease()">Upload APK</button>
-        <span class="small-muted">Only the Super User can upload. The newest 5 builds are kept; older ones are deleted automatically.${storage!=='r2'? ' <b style="color:var(--danger);">R2 storage is not configured on this deployment</b> (bind SPN_FILES in wrangler.jsonc).':''}</span>
-      </div>` : ''}
-    ${rel.length? rel.map((r,i)=>`<div class="release-row">
+        <span class="small-muted">Only the Super User can upload. The newest 5 builds are kept; older ones are deleted automatically.<span id="rel-storage-note"></span></span>
+      </div></div>` : ''}
+    <div id="rel-list"></div>
+    <div class="small-muted" style="margin-top:10px;">The login page shows the current build to everyone. Android asks once to allow installs from this source.</div>`;
+  }
+  const note = document.getElementById('rel-storage-note');
+  if(note) note.innerHTML = storage!=='r2'? ' <b style="color:var(--danger);">R2 storage is not configured on this deployment</b> (bind SPN_FILES in wrangler.jsonc).' : '';
+  document.getElementById('rel-list').innerHTML = rel.length? rel.map((r,i)=>`<div class="release-row">
         <b>v${esc(r.version)}</b> ${i===0? st('green','Current'):st('slate','Previous')} ${r.platform==='ios'? st('slate','iOS'):''}
         <span class="small-muted">${fmtBytes(r.size)} · ${esc(new Date(r.createdAt).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}))}</span>
         <span class="small-muted" style="flex:1;min-width:120px;">${esc(r.notes||'')}</span>
         <a class="btn sm secondary" href="${esc(apiUrl('releases/'+r.id+'/download'))}" download="${esc(apkFileName(r.version, r.platform))}">Download</a>
-        ${isSuper()? `<button class="btn sm ghost" onclick="deleteRelease('${esc(r.id)}')">Delete</button>`:''}
-      </div>`).join('') : '<div class="small-muted">No app build uploaded yet.</div>'}
-    <div class="small-muted" style="margin-top:10px;">The login page shows the current build to everyone. Android asks once to allow installs from this source.</div>`;
+        ${isSuper()? `<button class="btn sm ghost" onclick="deleteRelease(${jsArg(r.id)})">Delete</button>`:''}
+      </div>`).join('') : '<div class="small-muted">No app build uploaded yet.</div>';
 }
 async function uploadRelease(){
   if(!isSuper()){ toast('Only the Super User can upload app builds.','err'); return; }
@@ -12030,13 +12264,15 @@ async function uploadRelease(){
     });
     logActivity(`Uploaded SPN OS Android release v${v}.`); saveData();
     toast('Release v'+v+' uploaded'+(res && res.purged? ' · '+res.purged+' old build'+(res.purged===1?'':'s')+' removed':'')+'.');
-    RELEASES_CACHE = null; loadReleasesCard();
+    ['rel-file','rel-version','rel-notes'].forEach(id=>{ const el = document.getElementById(id); if(el) el.value = ''; });
+    if(btn){ btn.disabled = false; btn.textContent = 'Upload APK'; }
+    RELEASES_CACHE = null; RELEASES_AT = 0; loadReleasesCard();
   }catch(e){ toast('Upload failed: '+e.message,'err'); if(btn){ btn.disabled=false; btn.textContent='Upload APK'; } }
 }
 async function deleteRelease(id){
   if(!isSuper()) return;
   if(!confirm('Delete this app build? Devices that already installed it are not affected.')) return;
-  try{ await API.req('releases/'+id, {method:'DELETE'}); logActivity('Deleted an SPN OS app build.'); saveData(); toast('Release deleted.'); RELEASES_CACHE = null; loadReleasesCard(); }
+  try{ await API.req('releases/'+id, {method:'DELETE'}); logActivity('Deleted an SPN OS app build.'); saveData(); toast('Release deleted.'); RELEASES_CACHE = null; RELEASES_AT = 0; loadReleasesCard(); }
   catch(e){ toast('Could not delete: '+e.message,'err'); }
 }
 

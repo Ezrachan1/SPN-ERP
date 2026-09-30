@@ -369,6 +369,17 @@ function mergeMessageView(stored, incoming, uid, opts) {
   const all = Array.isArray(stored) ? stored : [];
   const byId = new Map(all.map(m => [String(m && m.id), m]));
   const mine = new Map();
+  /* who really receives each new send, by batch: a visible To or Cc list may only name them */
+  const batchMembers = new Map();
+  (Array.isArray(incoming) ? incoming : []).forEach(m => {
+    if (!m || m.fromId !== uid || m.id == null || byId.has(String(m.id)) || typeof m.batchId !== 'string') return;
+    if (o.userIds && !o.userIds.has(String(m.toId))) return;
+    const k = m.kind === 'cc' ? 'cc' : (m.kind === 'bcc' ? 'bcc' : 'to');
+    if (!batchMembers.has(m.batchId)) batchMembers.set(m.batchId, { to: new Set(), cc: new Set(), bcc: new Set() });
+    batchMembers.get(m.batchId)[k].add(String(m.toId));
+  });
+  /* names come from the accounts themselves, not from what the sender wrote */
+  const nameOf = (id, fallback) => (o.userNames && o.userNames.has(String(id))) ? o.userNames.get(String(id)) : String(fallback || '').slice(0, 120);
   (Array.isArray(incoming) ? incoming : []).forEach(m => {
     if (!m || m.id == null) return;
     const id = String(m.id), prev = byId.get(id);
@@ -387,8 +398,23 @@ function mergeMessageView(stored, incoming, uid, opts) {
       const t = +m.ts || 0;
       if (t < cutoff) { rejected.push({ id, reason: 'expired' }); return; }
       const ts = Math.min(t, now);
-      mine.set(id, { id: m.id, fromId: uid, fromName: String(o.userName || m.fromName || '').slice(0, 120), toId: String(m.toId), toName: String(m.toName || '').slice(0, 120),
-        subject: String(m.subject || '(no subject)').slice(0, 200), body: m.body, ts, read: false });
+      const row = { id: m.id, fromId: uid, fromName: String(o.userName || m.fromName || '').slice(0, 120), toId: String(m.toId), toName: nameOf(m.toId, m.toName),
+        subject: String(m.subject || '(no subject)').slice(0, 200), body: m.body, ts, read: false };
+      /* one send to several people: the rows share a batch id, say how each person received it
+         (To, Cc or Bcc) and carry the visible To and Cc lists; nothing else is kept */
+      const idOk = v => typeof v === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(v);
+      /* at most 12 names per list (the client applies the same cap and counts the rest), and
+         only people who really received this send, under the account's own name */
+      const cleanList = (l, members) => Array.isArray(l) ? l.slice(0, 12).filter(x => x && idOk(x.id) && (!members || members.has(x.id))).map(x => ({ id: x.id, name: nameOf(x.id, x.name) })) : null;
+      if (idOk(m.batchId)) row.batchId = m.batchId;
+      if (m.kind === 'to' || m.kind === 'cc' || m.kind === 'bcc') row.kind = m.kind;
+      const bm = row.batchId ? batchMembers.get(row.batchId) : null;
+      const tl = cleanList(m.toList, bm && bm.to), cl = cleanList(m.ccList, bm && bm.cc);
+      if (tl) row.toList = tl;
+      if (cl) row.ccList = cl;
+      if (Number.isInteger(m.toMore) && m.toMore > 0 && m.toMore <= 60) row.toMore = m.toMore;
+      if (Number.isInteger(m.ccMore) && m.ccMore > 0 && m.ccMore <= 60) row.ccMore = m.ccMore;
+      mine.set(id, row);
     }
   });
   /* without a base the client cannot know what it deleted: a write with no base adds and
@@ -1034,8 +1060,10 @@ async function handleApi(req, env, url) {
             const viewText = JSON.stringify(messagesViewFor(stored, session.userId));
             /* the client's base is its own view: a stale view merges on the client first */
             if (base && syncHash(viewText) !== base) return json({ error: 'Messages changed on the server', code: 'conflict', json: viewText, hash: syncHash(viewText) }, 409);
-            const userIds = new Set(((await env.SPN_DB.prepare('SELECT id FROM users').all()).results || []).map(r => String(r.id)));
-            const mo = { allowDelete: !!base, userName: session.user && session.user.name, userIds };
+            const urows = (await env.SPN_DB.prepare('SELECT id, json FROM users').all()).results || [];
+            const userNames = new Map(urows.map(r => { let nm = ''; try { nm = String((JSON.parse(r.json) || {}).name || ''); } catch (e) {} return [String(r.id), nm.slice(0, 120)]; }));
+            const userIds = new Set(userNames.keys());
+            const mo = { allowDelete: !!base, userName: session.user && session.user.name, userIds, userNames };
             const mergedText = JSON.stringify(mergeMessageView(stored, incoming, session.userId, mo));
             if (new TextEncoder().encode(mergedText).length > 1900000) return json({ error: 'The message store is full; older messages must be deleted first', code: 'too-large' }, 413);
             const done = row ? await putCollectionIfBase(env, name, mergedText, syncHash(row.json), 'messages') : (await putCollection(env, name, mergedText, 'messages'), true);
