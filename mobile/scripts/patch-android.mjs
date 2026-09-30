@@ -60,3 +60,23 @@ if (fs.existsSync(strings)) {
               .replace(/<string name="title_activity_main">[^<]*<\/string>/, '<string name="title_activity_main">SPN OS</string>');
   if (s2 !== s) { fs.writeFileSync(strings, s2); console.log('strings.xml: app name set to SPN OS'); }
 }
+
+/* Android 15 draws apps edge to edge. capacitor.config.json sets adjustMarginsForEdgeToEdge
+   so the WebView sits between the status bar and the navigation bar; the strips it leaves
+   show the window background, so that is the brand green, with light system icons. */
+const styles = path.join(root, 'android', 'app', 'src', 'main', 'res', 'values', 'styles.xml');
+if (fs.existsSync(styles)) {
+  let st = fs.readFileSync(styles, 'utf8');
+  const bars = '        <item name="android:windowBackground">@color/spnBars</item>\n' +
+               '        <item name="android:statusBarColor">@color/spnBars</item>\n' +
+               '        <item name="android:navigationBarColor">@color/spnBars</item>\n' +
+               '        <item name="android:windowLightStatusBar">false</item>\n' +
+               '        <item name="android:windowLightNavigationBar">false</item>\n';
+  const st2 = st.replace(/(<style name="AppTheme\.NoActionBar"[^>]*>\n)((?:(?!<\/style>)[\s\S])*?)(\s*<\/style>)/, (m, open, body, close) =>
+    body.includes('spnBars') ? m : open + body.replace(/\s*$/, '\n') + bars + close.replace(/^\s*/, '    '));
+  if (st2 !== st) { fs.writeFileSync(styles, st2); console.log('styles.xml: system bar colours set'); }
+  else console.log('styles.xml: system bar colours already set');
+  const colors = path.join(root, 'android', 'app', 'src', 'main', 'res', 'values', 'colors.xml');
+  let c = fs.existsSync(colors) ? fs.readFileSync(colors, 'utf8') : '<?xml version="1.0" encoding="utf-8"?>\n<resources>\n</resources>\n';
+  if (!c.includes('name="spnBars"')) { c = c.replace('</resources>', '    <color name="spnBars">#1E2B22</color>\n</resources>'); fs.writeFileSync(colors, c); console.log('colors.xml: spnBars added'); }
+}

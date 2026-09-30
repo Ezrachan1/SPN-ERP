@@ -34,7 +34,8 @@
   }catch(e){}
 
   /* 3) share-sheet downloads */
-  async function shareBlob(blob, filename){
+  /* opts.text becomes the message caption (WhatsApp shows it under the PDF) */
+  async function shareBlob(blob, filename, opts){
     if(!P.Filesystem || !P.Share){ alert('Sharing is not available in this build.'); return; }
     const b64 = await new Promise(function(res, rej){
       const fr = new FileReader();
@@ -44,7 +45,10 @@
     });
     const safe = String(filename || 'file').replace(/[^A-Za-z0-9._-]+/g, '_');
     const w = await P.Filesystem.writeFile({ path: safe, data: b64, directory: 'CACHE' });
-    await P.Share.share({ title: safe, url: w.uri, dialogTitle: 'Save or share ' + safe });
+    const o = opts || {};
+    const req = { title: safe, url: w.uri, dialogTitle: o.dialogTitle || ('Save or share ' + safe) };
+    if(o.text) req.text = String(o.text);
+    await P.Share.share(req);
   }
   window.SPN_MOBILE = { shareBlob: shareBlob, platform: cap.getPlatform ? cap.getPlatform() : 'android' };
 

@@ -125,14 +125,18 @@ const COLLECTIONS = [
   'reportsAccessList', 'accessRequests', 'aiScans', 'activityStats', 'weatherLocation',
   'salesHistory', 'priceHistory', 'companyKraPin', 'leadsMonthlyTarget', 'org',
   'dailyExpenses', 'accuWeatherApiKey', 'googleMapsApiKey',
+  'plotActivities', 'customSowingRates', 'customSowingOrders', 'messages', 'livestockHealthTasks', 'livestockProducts',
 ];
 /* settings every device reads but only admins may write (see the collections PUT route) */
-const ADMIN_ONLY_COLLECTIONS = ['org', 'companyKraPin', 'accuWeatherApiKey', 'googleMapsApiKey'];
+/* settings: custom sowing rates price every order, and the livestock rotation plan decides
+   which drug class is used next, so only managers change them */
+const ADMIN_ONLY_COLLECTIONS = ['org', 'companyKraPin', 'accuWeatherApiKey', 'googleMapsApiKey', 'customSowingRates', 'livestockProducts'];
 const OPERATIONAL = [
   'staff', 'consumables', 'seedlingStock', 'seedInventory', 'priceList', 'suppliers', 'livestockInventory', 'farmPlots', 'rainfallLog',
   'sowingRecords', 'cashSales', 'procurement', 'requisitions', 'leads', 'auditLog',
   'accessRequests', 'aiScans', 'activityStats', 'salesHistory', 'priceHistory',
   'dailyExpenses',
+  'plotActivities', 'customSowingOrders', 'messages', 'livestockHealthTasks',
 ];
 
 let schemaReady = false;
@@ -157,6 +161,10 @@ async function ensureSchema(env) {
   /* migration: collections carry their content hash so the optimistic-concurrency write
      can be one conditional UPDATE instead of a read-compare-write with a gap in between */
   try { await env.SPN_DB.prepare('ALTER TABLE collections ADD COLUMN hash TEXT').run(); } catch (e) {}
+
+  /* migration: files gained a kind; 'doc' marks private staff documents (ID copies), which
+     are never served by the public image route */
+  try { await env.SPN_DB.prepare('ALTER TABLE files ADD COLUMN kind TEXT').run(); } catch (e) {}
   schemaReady = true;
 }
 
@@ -241,6 +249,7 @@ async function requireSession(req, env) {
   return { token, userId: row.user_id, user };
 }
 const isAdmin = u => u && (u.role === 'Admin' || u.role === 'SuperUser');
+const canHR = u => isAdmin(u) || (u && u.role === 'HR') || (u && Array.isArray(u.access) && u.access.includes('hr'));
 
 /* ---- account vocabulary and guardrails ----
    An id is client-chosen at registration and is interpolated into an onclick in
@@ -325,12 +334,83 @@ async function buildBackupDump(env) {
   for (const r of rows) { try { collections[r.name] = JSON.parse(r.json); } catch (e) {} }
   return { kind: 'spn-erp-backup', version: 2, exportedAt: new Date().toISOString(), users, collections };
 }
+/* ---- private messages ----
+   One stored collection, but every user only ever receives and writes the messages
+   they sent or received. The client syncs its own view like any collection; the server
+   merges that view back into the full store, so no device holds anyone else's mail. */
+/* staff rows as a non-HR user sees them: no references to the private ID documents */
+function staffViewFor(rows) { return (Array.isArray(rows) ? rows : []).map(r => { if (!r || !(r.idFileSrc || r.idFileId)) return r; const c = Object.assign({}, r); delete c.idFileSrc; delete c.idFileId; return c; }); }
+/* record ids are placed inside inline handlers across the app (onclick="open('<id>')"): a new id
+   carrying a quote, markup or a backslash could run script in a colleague's session */
+const SAFE_RECORD_ID_RE = /^[^'"<>`\\&\r\n]{1,160}$/;
+/* the first record in `incoming` whose id is unsafe and not already stored (old data is left alone) */
+function unsafeNewId(incoming, stored) {
+  if (!Array.isArray(incoming)) return null;
+  let known = null;
+  for (const r of incoming) {
+    if (!r || typeof r !== 'object' || r.id == null || SAFE_RECORD_ID_RE.test(String(r.id))) continue;
+    if (!known) known = new Set((Array.isArray(stored) ? stored : []).map(x => x && x.id != null ? String(x.id) : null));
+    if (!known.has(String(r.id))) return String(r.id);
+  }
+  return null;
+}
+const MESSAGE_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
+const ownsMessage = (m, uid) => !!m && (m.fromId === uid || m.toId === uid);
+function messagesViewFor(all, uid) { const cutoff = Date.now() - MESSAGE_RETENTION_MS; return (Array.isArray(all) ? all : []).filter(m => ownsMessage(m, uid) && (+m.ts || 0) >= cutoff); }
+/* returns the full store after applying one user's edited view: new mail must be from
+   them, a recipient may only mark mail read, either party may delete it, and nothing
+   outside their view is touched */
+function mergeMessageView(stored, incoming, uid, opts) {
+  const o = opts || {};
+  /* new mail the server will not take is reported back, so the sender is told instead of
+     seeing it vanish from Sent */
+  const rejected = []; o.rejected = rejected;
+  const now = Date.now(), cutoff = now - MESSAGE_RETENTION_MS;
+  const all = Array.isArray(stored) ? stored : [];
+  const byId = new Map(all.map(m => [String(m && m.id), m]));
+  const mine = new Map();
+  (Array.isArray(incoming) ? incoming : []).forEach(m => {
+    if (!m || m.id == null) return;
+    const id = String(m.id), prev = byId.get(id);
+    if (prev) {
+      /* someone else's message, or the tombstone of a deleted one: ignored, so a stale copy
+         cannot bring a deleted message back */
+      if (!ownsMessage(prev, uid)) return;
+      if (prev.fromId === uid) mine.set(id, Object.assign({}, prev, { read: prev.toId === uid ? !!m.read : !!prev.read }));
+      else mine.set(id, Object.assign({}, prev, { read: !!prev.read || !!m.read }));
+    } else if (m.fromId === uid) {
+      if (!m.toId || m.toId === uid || typeof m.body !== 'string' || m.body.length > 8000 || typeof m.id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(m.id)) { rejected.push({ id, reason: 'invalid' }); return; }
+      if (o.userIds && !o.userIds.has(String(m.toId))) { rejected.push({ id, reason: 'no-recipient' }); return; }
+      /* the sender's time is kept (mail written offline keeps the time it was written) but
+         never in the future; a row already past retention is refused, since a purged
+         message re-sent by a stale copy cannot be told from new mail with a wrong date */
+      const t = +m.ts || 0;
+      if (t < cutoff) { rejected.push({ id, reason: 'expired' }); return; }
+      const ts = Math.min(t, now);
+      mine.set(id, { id: m.id, fromId: uid, fromName: String(o.userName || m.fromName || '').slice(0, 120), toId: String(m.toId), toName: String(m.toName || '').slice(0, 120),
+        subject: String(m.subject || '(no subject)').slice(0, 200), body: m.body, ts, read: false });
+    }
+  });
+  /* without a base the client cannot know what it deleted: a write with no base adds and
+     marks read, but never removes anything */
+  if (!o.allowDelete) all.forEach(m => { if (ownsMessage(m, uid) && !mine.has(String(m.id))) mine.set(String(m.id), m); });
+  /* a message either party deletes leaves a tombstone until its retention ends: it names no
+     sender or recipient, so no view ever shows it, and it stops a stale device re-sending
+     the message as new */
+  const tombs = [];
+  if (o.allowDelete) all.forEach(m => { if (ownsMessage(m, uid) && !mine.has(String(m.id))) tombs.push({ id: m.id, deleted: true, ts: +m.ts || now }); });
+  /* the user's view is replaced by what they sent; everyone else's mail stays as stored */
+  const out = all.filter(m => !ownsMessage(m, uid));
+  mine.forEach(m => out.push(m));
+  tombs.forEach(t => out.push(t));
+  return out.filter(m => (+m.ts || 0) >= cutoff).sort((a, b) => (+a.ts || 0) - (+b.ts || 0));
+}
 const HISTORY_KEEP = 40;
 /* the version being replaced is kept, so a bad merge or a mistaken clear can be undone
    from Users & Access; a write that changes nothing keeps no version */
 async function putCollection(env, name, jsonText, by) {
   const prev = await env.SPN_DB.prepare('SELECT json, updated_at FROM collections WHERE name = ?').bind(name).first();
-  if (prev && prev.json && prev.json !== jsonText && !/ApiKey$/.test(name)) {
+  if (prev && prev.json && prev.json !== jsonText && !/ApiKey$/.test(name) && name !== 'messages') {
     let count = null; try { const v = JSON.parse(prev.json); count = Array.isArray(v) ? v.length : null; } catch (e) {}
     await env.SPN_DB.batch([
       env.SPN_DB.prepare('INSERT INTO collection_history (name, json, count, updated_at, by) VALUES (?, ?, ?, ?, ?)').bind(name, prev.json, count, prev.updated_at || Date.now(), by || null),
@@ -353,7 +433,7 @@ async function putCollectionIfBase(env, name, jsonText, base, by) {
   if (cur.hash !== realHash) { await env.SPN_DB.prepare('UPDATE collections SET hash = ? WHERE name = ? AND json = ?').bind(realHash, name, cur.json).run(); }
   let prevCount = null; try { const v = JSON.parse(cur.json); prevCount = Array.isArray(v) ? v.length : null; } catch (e) {}
   const now = Date.now();
-  const keepHistory = !/ApiKey$/.test(name);
+  const keepHistory = !/ApiKey$/.test(name) && name !== 'messages';
   const stmts = [];
   if (keepHistory) stmts.push(env.SPN_DB.prepare('INSERT INTO collection_history (name, json, count, updated_at, by) SELECT name, json, ?, updated_at, ? FROM collections WHERE name = ? AND hash = ? AND json != ?').bind(prevCount, by || null, name, base, jsonText));
   stmts.push(env.SPN_DB.prepare('UPDATE collections SET json = ?, hash = ?, updated_at = ? WHERE name = ? AND hash = ?').bind(jsonText, syncHash(jsonText), now, name, base));
@@ -483,8 +563,9 @@ async function handleApi(req, env, url) {
             return new Response(obj.body, { headers: { 'Content-Type': (obj.httpMetadata && obj.httpMetadata.contentType) || 'image/jpeg', 'Cache-Control': 'private, max-age=86400', 'ETag': obj.httpEtag } });
           }
         }
-        const row = await env.SPN_DB.prepare('SELECT mime, data FROM files WHERE id = ?').bind(id).first();
-        if (!row) return json({ error: 'Not found' }, 404);
+        const row = await env.SPN_DB.prepare('SELECT mime, data, kind FROM files WHERE id = ?').bind(id).first();
+        /* private documents are only served through the signed-in /api/docs route */
+        if (!row || row.kind === 'doc') return json({ error: 'Not found' }, 404);
         const bytes = Uint8Array.from(atob(row.data), c => c.charCodeAt(0));
         return new Response(bytes, { headers: { 'Content-Type': row.mime || 'image/jpeg', 'Cache-Control': 'private, max-age=86400' } });
       }
@@ -753,6 +834,21 @@ async function handleApi(req, env, url) {
       if (route === 'files' && req.method === 'POST') {
         const body = await req.json().catch(() => ({}));
         const data = String(body.data || '');
+        if (body.kind === 'doc') {
+          if (!canHR(session.user)) return json({ error: 'Only HR or an administrator can store staff documents' }, 403);
+          if (!data || data.length > 1400000) return json({ error: 'Document missing or too large (max about 1 MB)' }, 413);
+          const dmime = /^(image\/(jpeg|png|webp)|application\/pdf)$/.test(String(body.mime || '')) ? body.mime : null;
+          if (!dmime) return json({ error: 'Documents must be a JPEG, PNG, WebP image or a PDF' }, 415);
+          const did = newId();
+          if (hasR2(env)) {
+            const bytes = Uint8Array.from(atob(data), c => c.charCodeAt(0));
+            await env.SPN_FILES.put('doc/' + did, bytes, { httpMetadata: { contentType: dmime }, customMetadata: { owner: session.userId, createdAt: String(Date.now()) } });
+            return json({ ok: true, id: did, kind: 'doc', storage: 'r2' });
+          }
+          await env.SPN_DB.prepare('INSERT INTO files (id, owner, mime, data, size, created_at, kind) VALUES (?, ?, ?, ?, ?, ?, ?)')
+            .bind(did, session.userId, dmime, data, data.length, Date.now(), 'doc').run();
+          return json({ ok: true, id: did, kind: 'doc', storage: 'd1' });
+        }
         if (!data || data.length > 900000) return json({ error: 'Image missing or too large (max ~650 KB after downscaling)' }, 413);
         const mime = /^image\/(jpeg|png|webp)$/.test(String(body.mime || '')) ? body.mime : 'image/jpeg';
         const id = newId();
@@ -766,9 +862,32 @@ async function handleApi(req, env, url) {
           .bind(id, session.userId, mime, data, data.length, Date.now()).run();
         return json({ ok: true, id, storage: 'd1' });
       }
+      /* private staff documents: HR and admins only, never cached */
+      if (route.startsWith('docs/') && req.method === 'GET') {
+        if (!canHR(session.user)) return json({ error: 'Only HR or an administrator can open staff documents' }, 403);
+        const id = route.slice('docs/'.length);
+        if (!/^[a-zA-Z0-9]+$/.test(id)) return json({ error: 'Not found' }, 404);
+        const hdr = mime => ({ 'Content-Type': mime || 'application/octet-stream', 'Cache-Control': 'private, no-store', 'Content-Disposition': 'inline', 'X-Content-Type-Options': 'nosniff' });
+        if (hasR2(env)) {
+          const obj = await env.SPN_FILES.get('doc/' + id);
+          if (obj) return new Response(obj.body, { headers: hdr(obj.httpMetadata && obj.httpMetadata.contentType) });
+        }
+        const row = await env.SPN_DB.prepare('SELECT mime, data FROM files WHERE id = ?').bind(id).first();
+        if (!row) return json({ error: 'Not found' }, 404);
+        return new Response(Uint8Array.from(atob(row.data), c => c.charCodeAt(0)), { headers: hdr(row.mime) });
+      }
       if (route.startsWith('files/') && req.method === 'DELETE') {
         const id = route.slice('files/'.length);
-        if (hasR2(env)) { try { await env.SPN_FILES.delete('img/' + id); } catch (e) {} }
+        if (!/^[a-zA-Z0-9]+$/.test(id)) return json({ error: 'Not found' }, 404);
+        /* the uploader, or an admin (HR for documents), may delete a file */
+        const meta = await env.SPN_DB.prepare('SELECT owner, kind FROM files WHERE id = ?').bind(id).first();
+        let r2meta = null;
+        if (!meta && hasR2(env)) { try { r2meta = (await env.SPN_FILES.head('doc/' + id)) || (await env.SPN_FILES.head('img/' + id)); } catch (e) {} }
+        const owner = meta ? meta.owner : (r2meta && r2meta.customMetadata ? r2meta.customMetadata.owner : null);
+        const isDoc = meta ? meta.kind === 'doc' : !!(r2meta && r2meta.key && r2meta.key.startsWith('doc/'));
+        const allowed = owner === session.userId || isAdmin(session.user) || (isDoc && canHR(session.user));
+        if ((meta || r2meta) && !allowed) return json({ error: 'You can only delete files you uploaded' }, 403);
+        if (hasR2(env)) { try { await env.SPN_FILES.delete('img/' + id); } catch (e) {} try { await env.SPN_FILES.delete('doc/' + id); } catch (e) {} }
         await env.SPN_DB.prepare('DELETE FROM files WHERE id = ?').bind(id).run();
         return json({ ok: true });
       }
@@ -881,6 +1000,8 @@ async function handleApi(req, env, url) {
            Keyed off the granted module, not the role, so an HOD given HR still works. */
         const full = isAdmin(session.user) || session.user.role === 'HR'
           || (Array.isArray(session.user.access) && session.user.access.includes('hr'));
+        if (collections.messages) collections.messages = messagesViewFor(collections.messages, session.userId);
+        if (!canHR(session.user) && Array.isArray(collections.staff)) collections.staff = staffViewFor(collections.staff);
         const users = userRows.map(r => JSON.parse(r.json)).map(u => (full || u.id === session.userId) ? u : {
           id: u.id, name: u.name, role: u.role, designation: u.designation,
           department: u.department || '', status: statusOf(u), avatar: u.avatar || null, access: u.access || [],
@@ -899,12 +1020,85 @@ async function handleApi(req, env, url) {
           const cur = await env.SPN_DB.prepare('SELECT json FROM collections WHERE name = ?').bind(name).first();
           if (cur && cur.json === text) return json({ ok: true, hash: syncHash(text) });
           if (cur && cur.json) return json({ error: 'Only an Admin or the Super User can change this setting', code: 'forbidden', json: cur.json, hash: syncHash(cur.json) }, 409);
+          /* a list setting nobody has saved yet: the device adopts the empty list instead of retrying */
+          if (text.trim().startsWith('[')) return json({ error: 'Only an Admin or the Super User can change this setting', code: 'forbidden', json: '[]', hash: syncHash('[]') }, 409);
           return json({ error: 'Only an Admin or the Super User can change this setting', code: 'forbidden' }, 403);
+        }
+        if (name === 'messages') {
+          let incoming; try { incoming = JSON.parse(text); } catch (e) { return json({ error: 'Invalid JSON' }, 400); }
+          if (!Array.isArray(incoming)) return json({ error: 'Expected a list of messages' }, 400);
+          const base = req.headers.get('X-Base-Hash');
+          for (let attempt = 0; attempt < 4; attempt++) {
+            const row = await env.SPN_DB.prepare('SELECT json FROM collections WHERE name = ?').bind(name).first();
+            let stored = []; try { stored = row ? JSON.parse(row.json) : []; } catch (e) {}
+            const viewText = JSON.stringify(messagesViewFor(stored, session.userId));
+            /* the client's base is its own view: a stale view merges on the client first */
+            if (base && syncHash(viewText) !== base) return json({ error: 'Messages changed on the server', code: 'conflict', json: viewText, hash: syncHash(viewText) }, 409);
+            const userIds = new Set(((await env.SPN_DB.prepare('SELECT id FROM users').all()).results || []).map(r => String(r.id)));
+            const mo = { allowDelete: !!base, userName: session.user && session.user.name, userIds };
+            const mergedText = JSON.stringify(mergeMessageView(stored, incoming, session.userId, mo));
+            if (new TextEncoder().encode(mergedText).length > 1900000) return json({ error: 'The message store is full; older messages must be deleted first', code: 'too-large' }, 413);
+            const done = row ? await putCollectionIfBase(env, name, mergedText, syncHash(row.json), 'messages') : (await putCollection(env, name, mergedText, 'messages'), true);
+            if (done) {
+              /* when the stored view differs from what was sent (a name or time normalised, a
+                 row refused), the view comes back so the device can adopt it */
+              const view = JSON.stringify(messagesViewFor(JSON.parse(mergedText), session.userId));
+              const vh = syncHash(view);
+              return json(vh === syncHash(text) ? { ok: true, hash: vh } : { ok: true, hash: vh, json: view, rejected: mo.rejected });
+            }
+          }
+          return json({ error: 'Messages kept changing on the server; will retry', code: 'busy' }, 503);
+        }
+        /* a non-HR writer edits staff rows it received without ID document references: its
+           base is that stripped view, conflicts return that view, and the references are
+           re-attached from the stored rows so the edit can neither see nor drop them */
+        if (name === 'staff' && !canHR(session.user)) {
+          let incoming; try { incoming = JSON.parse(text); } catch (e) { return json({ error: 'Invalid JSON' }, 400); }
+          if (!Array.isArray(incoming)) return json({ error: 'Expected a list of staff records' }, 400);
+          if (incoming.some(r => r && typeof r === 'object' && r.id != null && !SAFE_RECORD_ID_RE.test(String(r.id)))) {
+            const cur = await env.SPN_DB.prepare('SELECT json FROM collections WHERE name = ?').bind(name).first();
+            let st = []; try { st = cur ? JSON.parse(cur.json) : []; } catch (e) {}
+            if (unsafeNewId(incoming, st)) return json({ error: 'A record id contains characters that are not allowed', code: 'bad-id' }, 400);
+          }
+          const base = req.headers.get('X-Base-Hash');
+          for (let attempt = 0; attempt < 4; attempt++) {
+            const row = await env.SPN_DB.prepare('SELECT json FROM collections WHERE name = ?').bind(name).first();
+            let stored = []; try { stored = row ? JSON.parse(row.json) : []; } catch (e) {}
+            const viewText = JSON.stringify(staffViewFor(stored));
+            if (base && syncHash(viewText) !== base) return json({ error: 'Staff records changed on the server', code: 'conflict', json: viewText, hash: syncHash(viewText) }, 409);
+            if (base) {
+              const declared = new Set(String(req.headers.get('X-Deleted-Ids') || '').split(',').filter(Boolean));
+              const have = new Set(incoming.map(x => x && x.id).filter(x => x != null).map(String));
+              const missing = stored.map(x => x && x.id).filter(x => x != null).map(String).filter(id => !have.has(id) && !declared.has(id));
+              if (missing.length) return json({ error: 'This write would remove ' + missing.length + ' record(s) the app did not delete; merging the server copy first', code: 'undeclared-deletion', missing: missing.slice(0, 50), json: viewText, hash: syncHash(viewText) }, 409);
+            }
+            const byId = new Map(stored.map(r => [String(r && r.id), r]));
+            const merged = incoming.map(r => {
+              if (!r || typeof r !== 'object') return r;
+              const c = Object.assign({}, r); delete c.idFileSrc; delete c.idFileId;
+              const prev = byId.get(String(r.id));
+              if (prev && prev.idFileSrc) c.idFileSrc = prev.idFileSrc;
+              if (prev && prev.idFileId) c.idFileId = prev.idFileId;
+              if (prev && prev.idUploaded) c.idUploaded = true; /* only HR can clear the flag */
+              return c;
+            });
+            const mergedText = JSON.stringify(merged);
+            if (new TextEncoder().encode(mergedText).length > 1900000) return json({ error: 'Staff records are too large to save', code: 'too-large' }, 413);
+            const done = row ? await putCollectionIfBase(env, name, mergedText, syncHash(row.json), session.userId) : (await putCollection(env, name, mergedText, session.userId), true);
+            if (done) return json({ ok: true, hash: syncHash(JSON.stringify(staffViewFor(merged))) });
+          }
+          return json({ error: 'Staff records kept changing on the server; will retry', code: 'busy' }, 503);
         }
         /* D1 caps a row at 2,000,000 bytes (UTF-8); say so plainly rather than failing every retry */
         const bytes = new TextEncoder().encode(text).length;
         if (bytes > 1900000) return json({ error: 'This module holds too much data for one record (' + Math.round(bytes / 1048576 * 10) / 10 + ' MB). Archive older entries from Users & Access before more can be saved.', code: 'too-large', bytes }, 413);
-        JSON.parse(text);
+        const parsedAll = JSON.parse(text);
+        if (Array.isArray(parsedAll) && parsedAll.some(r => r && typeof r === 'object' && r.id != null && !SAFE_RECORD_ID_RE.test(String(r.id)))) {
+          const cur = await env.SPN_DB.prepare('SELECT json FROM collections WHERE name = ?').bind(name).first();
+          let st = []; try { st = cur ? JSON.parse(cur.json) : []; } catch (e) {}
+          const bad = unsafeNewId(parsedAll, st);
+          if (bad) return json({ error: 'A record id contains characters that are not allowed', code: 'bad-id' }, 400);
+        }
         /* optimistic concurrency: the client states which version it is updating; if the
            stored copy differs the write does not happen and the server copy comes back (409)
            so the client merges by record. The check and the write are one SQL statement. */
@@ -1042,7 +1236,7 @@ async function handleApi(req, env, url) {
         if (!isAdmin(session.user)) return json({ error: 'Admin or Super User required' }, 403);
         const id = +route.slice('history/'.length);
         const row = await env.SPN_DB.prepare('SELECT name, json, count, updated_at, by FROM collection_history WHERE id = ?').bind(id).first();
-        if (!row) return json({ error: 'Version not found' }, 404);
+        if (!row || row.name === 'messages') return json({ error: 'Version not found' }, 404);
         return json({ id, name: row.name, count: row.count, updatedAt: row.updated_at, by: row.by, json: row.json });
       }
       if (route.startsWith('history/') && route.endsWith('/restore') && req.method === 'POST') {
