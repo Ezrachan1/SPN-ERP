@@ -453,6 +453,7 @@ table:not(.dtable) tbody tr:hover{background:var(--mint-soft);}
 .modal-head h3{margin:0;font-size:17px;color:var(--heading);}
 .modal-body{padding:20px 24px;}
 .modal-foot{padding:16px 24px;border-top:1px solid var(--line);display:flex;justify-content:flex-end;gap:10px;position:sticky;bottom:0;background:var(--surface);}
+.modal{scroll-padding-top:64px;scroll-padding-bottom:84px;}
 .x-close{background:none;border:none;color:var(--muted);font-size:20px;line-height:1;border-radius:6px;padding:2px 7px;}
 .x-close:hover{background:var(--mint-soft);color:var(--forest);}
 
@@ -3633,7 +3634,7 @@ function openSaleDrawer(id){
       ['Email', esc(s.email||'')||'-'],
       ['Customer KRA PIN', s.kraPin?`<span class="mono">${esc(s.kraPin)}</span>`:'-'],
       ['Company KRA PIN', DATA.companyKraPin?`<span class="mono">${esc(DATA.companyKraPin)}</span>`:'Not set'],
-      ['Items', `<table style="width:100%;font-size:12px;">${saleItems(s).map(it=>`<tr><td>${esc(it.crop)}</td><td class="mono" style="text-align:right;white-space:nowrap;">${esc(itemQtyLabel(it))}</td><td class="mono" style="text-align:right;white-space:nowrap;">@ ${money(it.unitPrice)}</td><td class="mono" style="text-align:right;white-space:nowrap;">${money(it.total)}</td></tr>`).join('')}</table>`],
+      ['Items', `<table style="width:100%;font-size:12px;">${saleItems(s).map(it=>`<tr><td>${esc(it.crop)}${saleLineSourceText(it)? `<div class="cell-sub">${esc(saleLineSourceText(it))}</div>` : ''}</td><td class="mono" style="text-align:right;white-space:nowrap;">${esc(itemQtyLabel(it))}</td><td class="mono" style="text-align:right;white-space:nowrap;">@ ${money(it.unitPrice)}</td><td class="mono" style="text-align:right;white-space:nowrap;">${money(it.total)}</td></tr>`).join('')}</table>`],
       ['Total', `<b class="mono">${money(s.total)}</b>${s.vatAmount? ` <span class="small-muted">incl. VAT ${money(s.vatAmount)}</span>`:''}`],
       ['VAT treatment', st('green', s.vat)],
       ['Payment', esc(s.payment)],
@@ -3824,7 +3825,7 @@ function offerReceiptShare(id){
 }
 function exportCashSalesExcel(){
   if(typeof XLSX==='undefined'){ toast('Excel library unavailable - check your connection.','err'); return; }
-  const rows = scopedSales().flatMap(s=>saleItems(s).map(it=>({Receipt:s.receiptNo, Date:s.date, Customer:s.customer, Phone:s.phone, 'Customer KRA PIN':s.kraPin||'-', Item:it.crop, Qty:it.qty, Unit:it.unit||'seedlings', 'Trays (eq., per line)': it.unit==='trays'? (+it.qty||0) : (itemSeedlings(it)? trayEqOf(it.crop, itemSeedlings(it)) : ''), 'Unit Price':it.unitPrice, 'Line Total (KES)':it.total, 'Receipt Total (KES)':s.total, VAT:s.vat, 'VAT (KES)':s.vatAmount||0, Payment:s.payment, 'Served By':s.servedBy, Location:s.location||''})));
+  const rows = scopedSales().flatMap(s=>saleItems(s).map(it=>({Receipt:s.receiptNo, Date:s.date, Customer:s.customer, Phone:s.phone, 'Customer KRA PIN':s.kraPin||'-', Item:it.crop, Qty:it.qty, Unit:it.unit||'seedlings', 'Trays (eq., per line)': it.unit==='trays'? (+it.qty||0) : (itemSeedlings(it)? trayEqOf(it.crop, itemSeedlings(it)) : ''), 'Unit Price':it.unitPrice, 'Line Total (KES)':it.total, 'Drawn from stock':saleLineSourceText(it).replace(/^From /,''), 'Receipt Total (KES)':s.total, VAT:s.vat, 'VAT (KES)':s.vatAmount||0, Payment:s.payment, 'Served By':s.servedBy, Location:s.location||''})));
   if(!rows.length){ toast('No sales to export yet.','err'); return; }
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, excelSheet('Cash Sales Register', rows), 'Cash Sales');
@@ -3853,8 +3854,26 @@ function germinationOf(r){
   return Math.min(100, Math.max(0, +r.germinationPct||0));
 }
 function batchViable(r){ return Math.round((+r.qty||0)*(germinationOf(r)/100)); }
-function soldFromBatch(r){ return DATA.cashSales.reduce((a,s)=>a + saleItems(s).filter(it=>it.batchId===r.id).reduce((x,it)=>x+itemSeedlings(it),0), 0); }
-function batchRemaining(r){ if(r.closed) return 0; return Math.max(0, batchViable(r) - soldFromBatch(r)); }
+/* seedlings a batch has given to sales: a line records the batches it drew on (one or more,
+   oldest first), and older lines name a single batch */
+function lineDrawOn(it, batchId){
+  if(Array.isArray(it.allocations)) return it.allocations.reduce((y,al)=>y + (al && al.batchId===batchId ? (+al.seedlings||0) : 0), 0);
+  return it.batchId===batchId ? itemSeedlings(it) : 0;
+}
+/* while a sale form redraws, every batch's sold total is worked out in one pass over the
+   sales instead of one pass per batch per keystroke; the cache lives for one call only */
+let SOLD_CACHE = null;
+function soldMap(){
+  const m = new Map();
+  DATA.cashSales.forEach(s=>saleItems(s).forEach(it=>{
+    if(Array.isArray(it.allocations)) it.allocations.forEach(al=>{ if(al && al.batchId) m.set(al.batchId, (m.get(al.batchId)||0) + (+al.seedlings||0)); });
+    else if(it.batchId) m.set(it.batchId, (m.get(it.batchId)||0) + itemSeedlings(it));
+  }));
+  return m;
+}
+function withSoldCache(fn){ const outer = SOLD_CACHE; if(!outer) SOLD_CACHE = soldMap(); try{ return fn(); } finally { if(!outer) SOLD_CACHE = null; } }
+function soldFromBatch(r){ return SOLD_CACHE ? (SOLD_CACHE.get(r.id)||0) : DATA.cashSales.reduce((a,s)=>a + saleItems(s).reduce((x,it)=>x+lineDrawOn(it, r.id),0), 0); }
+function batchRemaining(r){ if(r.closed) return 0; return Math.max(0, Math.round(batchViable(r) - soldFromBatch(r))); }
 function readyBatches(){ return DATA.sowingRecords.filter(r=>computeStage(r).stage===4 && batchRemaining(r)>0); }
 function nextReceiptNo(){ const nums = DATA.cashSales.map(s=>parseInt(String(s.receiptNo||'').replace(/\D/g,''),10)).filter(n=>!isNaN(n)); return 'SPN-R-'+((nums.length? Math.max(...nums) : 1041)+1); }
 /* ---------------- price list ----------------
@@ -3937,6 +3956,11 @@ function itemSeedlings(it){
   if(it.seedlings!=null) return +it.seedlings||0;
   if(it.unit==='trays') return (+it.qty||0) * (+it.traySize>0 ? +it.traySize : (traySizeFromPriceList(it.crop) || defaultTrayCells()));
   return (it.unit==='seedlings'||!it.unit) ? +it.qty||0 : 0;
+}
+/* "from SPN-0725-01 (300), SPN-0725-04 (100)" for a line that drew on nursery stock */
+function saleLineSourceText(it){
+  const a = Array.isArray(it.allocations) ? it.allocations : (it.batchCode ? [{batchCode:it.batchCode, seedlings:itemSeedlings(it)}] : []);
+  return a.length ? 'From '+a.map(x=>x.batchCode+' ('+(+x.seedlings||0).toLocaleString()+')').join(', ') : '';
 }
 function itemQtyLabel(it){
   if(it.unit==='trays') return `${(+it.qty||0).toLocaleString()} tray${+it.qty===1?'':'s'}${it.traySize? ' × '+it.traySize : ''}`;
@@ -4024,31 +4048,123 @@ function traysOfLabel(crop, seedlings){
 function saleLooseSeedlings(s){ return saleItems(s).reduce((a,it)=> a + ((it.unit||'seedlings')==='seedlings'? (+it.qty||0) : 0), 0); }
 function saleSeedlingsTotal(s){ return saleItems(s).reduce((a,it)=>a+itemSeedlings(it),0); }
 let SALE_DRAFT = [];
+/* ---- sale lines draw on nursery stock ----
+   A seedling or tray line takes its seedlings from the ready batches by itself, oldest
+   first, unless one batch is picked or the line is marked as not from nursery stock
+   (bought-in seedlings, produce). No stock figure is stored: a batch's remaining seedlings
+   are what it grew less every sale line drawn on it, so recording or deleting a sale moves
+   the stock with it. */
+const stockItemName = r => `${r.crop} ${r.variety||''}`.replace(/\s+/g,' ').trim();
+const saleBatchLabel = r => stockItemName(r)+' · '+r.batchCode; /* the older way to pick a batch, still understood */
+function readyStockItems(){
+  const m = new Map();
+  readyBatches().forEach(r=>{
+    const k = r.crop+'|'+(r.variety||'');
+    const e = m.get(k) || {crop:r.crop, variety:r.variety||'', name:stockItemName(r), seedlings:0, batches:0};
+    e.seedlings += batchRemaining(r); e.batches++; m.set(k, e);
+  });
+  return [...m.values()].sort((a,b)=>a.name.localeCompare(b.name));
+}
+/* oldest stock first: the batch that turned ready first, then the one sown first */
+function fifoBatches(list){
+  const key = r => (computeStage(r).readyDate||'')+'|'+(r.dateSown||'')+'|'+(r.batchCode||'');
+  return list.slice().sort((a,b)=>key(a)<key(b)? -1 : (key(a)>key(b)? 1 : 0));
+}
+/* the ready batches a line can draw on: a stock item names its crop and variety; any other
+   text (a price-list product, a typed crop) draws on every ready batch of the crop it names,
+   narrowed to a variety it also names. Kg, pcs and bags are produce, never seedling stock. */
+function saleLineCandidates(row){
+  if(row.unit!=='seedlings' && row.unit!=='trays') return [];
+  const t = String(row.product||'').trim(); if(!t) return [];
+  const ready = readyBatches();
+  const si = readyStockItems().find(x=>x.name===t);
+  if(si) return fifoBatches(ready.filter(r=>r.crop===si.crop && (r.variety||'')===si.variety));
+  const crop = canonicalCrop(t), lc = t.toLowerCase();
+  const byCrop = ready.filter(r=>lineNamesCrop(lc, crop, r));
+  const byVariety = byCrop.filter(r=>r.variety && lc.includes(String(r.variety).toLowerCase()));
+  return fifoBatches(byVariety.length? byVariety : byCrop);
+}
+/* the names a batch's crop goes by: "Brassica (Cabbage/Kale)" is also cabbage and kale, and
+   a plain "Brassica" batch takes the same aliases from the common crop list */
+const reEscape = s => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+function cropTerms(crop){
+  const s = String(crop||''), base = s.split(' (')[0].trim().toLowerCase();
+  const inner = c => ((String(c).match(/\(([^)]*)\)/)||[])[1]||'').split('/').map(x=>x.trim().toLowerCase());
+  const terms = new Set([base, ...inner(s)]);
+  const cc = COMMON_CROPS.find(c=>c.split(' (')[0].toLowerCase()===base); if(cc) inner(cc).forEach(x=>terms.add(x));
+  terms.delete(''); return [...terms];
+}
+function lineNamesCrop(lc, lineCrop, r){
+  return (lineCrop!=='Other' && canonicalCrop(r.crop)===lineCrop) || cropTerms(r.crop).some(w=>new RegExp('\\b'+reEscape(w)+'\\b').test(lc));
+}
+/* how a line takes its stock: one batch, oldest first across its batches, or not at all */
+function saleLineSource(row){
+  const cands = saleLineCandidates(row);
+  if(row.source==='none') return {mode:'none', cands};
+  if(row.source && row.source!=='auto'){ const b = cands.find(r=>r.id===row.source); if(b) return {mode:'batch', batch:b, cands}; }
+  return cands.length? {mode:'auto', cands} : {mode:'none', cands, noStock:true};
+}
 function newSaleRow(batchId){
   const r = batchId ? DATA.sowingRecords.find(x=>x.id===batchId) : null;
   const pl = r ? findPriceItem(r.crop) : null;
-  return { product: r? `${r.crop} ${r.variety} · ${r.batchCode}` : '', batchId: r? r.id : null, unit: (pl&&pl.unit)||'seedlings', traySize: (pl&&pl.traySize)||defaultTrayCells(), qty: r? 100 : 1, unitPrice: pl? pl.price : 0 };
+  const unit = (pl&&pl.unit)||'seedlings';
+  return { product: r? stockItemName(r) : '', source: r? r.id : 'auto', unit, traySize: (pl&&pl.traySize)||defaultTrayCells(), qty: r? (unit==='trays'? 1 : 100) : 1, unitPrice: pl? pl.price : 0 };
 }
-function saleRowSeedlings(row){ return row.unit==='trays'? (+row.qty||0)*(+row.traySize||0) : (+row.qty||0); }
+function saleRowSeedlings(row){ return Math.round(row.unit==='trays'? (+row.qty||0)*(+row.traySize||0) : (+row.qty||0)); }
 function saleDraftTotal(){ return SALE_DRAFT.reduce((a,r)=>a+Math.round((+r.qty||0)*(+r.unitPrice||0)),0); }
-function renderSaleItems(){
+/* stock left for line i once the lines above it have taken theirs, in the same order and the
+   same way the save does, so the notes agree with what Record Sale will accept */
+function saleDraftLeftBefore(i){
+  const left = new Map();
+  const leftOf = b => left.has(b.id) ? left.get(b.id) : batchRemaining(b);
+  SALE_DRAFT.slice(0, i).forEach(r=>{
+    if(!(r.product||'').trim() || !((+r.qty||0)>0)) return;
+    const src = saleLineSource(r); let need = saleRowSeedlings(r);
+    if(src.mode==='batch') left.set(src.batch.id, Math.max(0, leftOf(src.batch) - need));
+    else if(src.mode==='auto') for(const b of src.cands){ if(need<=0) break; const t = Math.min(need, leftOf(b)); if(t>0){ left.set(b.id, leftOf(b) - t); need -= t; } }
+  });
+  return leftOf;
+}
+/* the stock line under an item: where its seedlings come from and how many are there */
+function saleStockLineHTML(row, i){
+  if(row.unit!=='seedlings' && row.unit!=='trays') return '';
+  const src = saleLineSource(row);
+  if(!src.cands.length){
+    const p = String(row.product||'').trim(); if(!p) return '';
+    const crop = canonicalCrop(p);
+    return `<div class="cell-sub" style="color:var(--warn);">No ready ${esc(crop!=='Other'? crop : p)} stock: this line will not draw on the nursery</div>`;
+  }
+  const leftOf = saleDraftLeftBefore(i);
+  const avail = src.mode==='batch' ? leftOf(src.batch) : src.cands.reduce((a,b)=>a+leftOf(b),0);
+  const cropOf = src.mode==='batch' ? src.batch.crop : src.cands[0].crop;
+  const opts = [`<option value="auto" ${src.mode==='auto'?'selected':''}>Stock, oldest batches first · ${src.cands.reduce((a,b)=>a+leftOf(b),0).toLocaleString()} seedlings</option>`]
+    .concat(src.cands.map(b=>`<option value="${esc(b.id)}" ${src.mode==='batch' && src.batch.id===b.id?'selected':''}>Batch ${esc(b.batchCode)} · ${esc(b.variety||b.crop)} · ${leftOf(b).toLocaleString()} left</option>`))
+    .concat([`<option value="none" ${src.mode==='none'?'selected':''}>Not from nursery stock</option>`]);
+  const need = saleRowSeedlings(row);
+  return `<div class="cell-sub" style="margin-top:4px;"><select style="font-size:11.5px;padding:3px 6px;max-width:100%;" title="Where this line's seedlings come from" onchange="updSaleRow(${i},'source',this.value)">${opts.join('')}</select>
+    <div id="sale-stock-note-${i}">${saleStockNote(src, need, avail, cropOf)}</div></div>`;
+}
+function saleStockNote(src, need, avail, crop){
+  if(src.mode==='none') return '<span class="small-muted">Does not draw on the nursery</span>';
+  if(need > avail) return `<span style="color:var(--danger);">Needs ${need.toLocaleString()} seedlings; only ${avail.toLocaleString()} in ready stock</span>`;
+  return `<span class="small-muted">${traysOfLabel(crop, avail)} available${need? ' · '+(avail-need).toLocaleString()+' left after this line' : ''}</span>`;
+}
+function renderSaleItems(){ return withSoldCache(renderSaleItemsNow); }
+function renderSaleItemsNow(){
   const host = document.getElementById('sale-items'); if(!host) return;
-  const batches = readyBatches();
+  const stockItems = readyStockItems();
   host.innerHTML = `
-    ${trayTypeDatalist()}<datalist id="sale-prod-list">${batches.map(r=>`<option value="${esc(`${r.crop} ${r.variety} · ${r.batchCode}`)}">`).join('')}${priceListSorted().map(p=>`<option value="${esc(p.name)}">`).join('')}</datalist>
-    <div class="table-scroll"><table><thead><tr><th style="min-width:190px;">Item (product, batch or free text)</th><th>Unit</th><th style="width:80px;">Qty</th><th style="width:80px;">Tray size</th><th style="width:96px;">Unit price</th><th style="text-align:right;">Line total</th><th></th></tr></thead><tbody>
-      ${SALE_DRAFT.map((row,i)=>{
-        const batch = row.batchId? DATA.sowingRecords.find(x=>x.id===row.batchId) : null;
-        return `<tr>
-          <td><input list="sale-prod-list" value="${esc(row.product)}" oninput="updSaleRow(${i},'product',this.value)" placeholder="Type or pick">${batch? (()=>{ const left=batchRemaining(batch); return `<div class="cell-sub">${traysOfLabel(batch.crop, left)} · ${left.toLocaleString()} seedlings left in ${esc(batch.batchCode)}</div>`; })() : ''}</td>
+    ${trayTypeDatalist()}<datalist id="sale-prod-list">${stockItems.map(s=>`<option value="${esc(s.name)}" label="In stock · ${esc(traysOfLabel(s.crop, s.seedlings))}">`).join('')}${priceListSorted().map(p=>`<option value="${esc(p.name)}" label="Price list · ${esc(money(p.price))}">`).join('')}</datalist>
+    <div class="table-scroll"><table><thead><tr><th style="min-width:210px;">Item (in stock, price list or free text)</th><th>Unit</th><th style="width:80px;">Qty</th><th style="width:80px;">Tray size</th><th style="width:96px;">Unit price</th><th style="text-align:right;">Line total</th><th></th></tr></thead><tbody>
+      ${SALE_DRAFT.map((row,i)=>`<tr>
+          <td><input list="sale-prod-list" value="${esc(row.product)}" oninput="updSaleRow(${i},'product',this.value)" placeholder="Type or pick"><div id="sale-stock-line-${i}">${saleStockLineHTML(row, i)}</div></td>
           <td><select onchange="updSaleRow(${i},'unit',this.value)">${SALE_UNITS.map(u=>`<option ${row.unit===u?'selected':''}>${u}</option>`).join('')}</select></td>
-          <td><input type="number" min="0" step="any" value="${row.qty}" oninput="updSaleRow(${i},'qty',this.value)"></td>
-          <td>${row.unit==='trays'? `<input type="number" min="1" list="tray-type-list" value="${row.traySize||''}" title="Seedlings per tray (pick a registered tray type or type a count)" oninput="updSaleRow(${i},'traySize',this.value)">` : '<span class="small-muted">-</span>'}</td>
-          <td><input type="number" min="0" step="any" value="${row.unitPrice}" oninput="updSaleRow(${i},'unitPrice',this.value)"></td>
+          <td><input type="number" min="0" step="any" value="${esc(row.qty)}" oninput="updSaleRow(${i},'qty',this.value)"></td>
+          <td>${row.unit==='trays'? `<input type="number" min="1" list="tray-type-list" value="${esc(row.traySize||'')}" title="Seedlings per tray (pick a registered tray type or type a count)" oninput="updSaleRow(${i},'traySize',this.value)">` : '<span class="small-muted">-</span>'}</td>
+          <td><input type="number" min="0" step="any" value="${esc(row.unitPrice)}" oninput="updSaleRow(${i},'unitPrice',this.value)"></td>
           <td class="mono" style="text-align:right;white-space:nowrap;">${money(Math.round((+row.qty||0)*(+row.unitPrice||0)))}</td>
           <td>${SALE_DRAFT.length>1? `<button type="button" class="btn sm ghost" title="Remove line" onclick="rmSaleRow(${i})">×</button>`:''}</td>
-        </tr>`;
-      }).join('')}
+        </tr>`).join('')}
     </tbody></table></div>
     <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;gap:10px;flex-wrap:wrap;">
       <button type="button" class="btn sm secondary" onclick="addSaleRow()">+ Add item</button>
@@ -4057,43 +4173,63 @@ function renderSaleItems(){
 }
 function addSaleRow(){ SALE_DRAFT.push(newSaleRow()); renderSaleItems(); }
 function rmSaleRow(i){ SALE_DRAFT.splice(i,1); renderSaleItems(); }
-function updSaleRow(i, f, v){
+/* re-renders keep the caret where the user was typing */
+function rerenderSaleItemsKeepingCaret(i){
+  const act = document.activeElement, caret = act && act.selectionStart;
+  renderSaleItems();
+  const again = document.querySelectorAll('#sale-items tbody tr')[i]?.querySelector('input[list]');
+  if(again && act && act.getAttribute && act.getAttribute('list')==='sale-prod-list'){ again.focus(); try{ again.setSelectionRange(caret, caret); }catch(e){} }
+}
+function updSaleRow(i, f, v){ return withSoldCache(()=>updSaleRowNow(i, f, v)); }
+function updSaleRowNow(i, f, v){
   const row = SALE_DRAFT[i]; if(!row) return;
   if(f==='product'){
+    const candsBefore = saleLineCandidates(row).map(r=>r.id).join(',');
     row.product = v;
-    const t = v.trim();
-    const b = readyBatches().find(r=>`${r.crop} ${r.variety} · ${r.batchCode}`===t || (r.batchCode && t.includes(r.batchCode)));
-    const changedBatch = (b? b.id : null) !== row.batchId;
-    row.batchId = b? b.id : null;
-    /* price and unit apply only on a definite pick (exact price-list name or a batch),
-       never on partial typing, and the table re-renders only when something else on
-       the row actually changed - typing free text must never lose the caret */
-    const pl = t.length>=3 ? findPriceItem(b? b.crop : t) : null;
-    const exact = !!pl && (!!b || pl.name.toLowerCase()===t.toLowerCase());
+    let t = v.trim();
+    /* a batch picked the older way ("Tomato Zara F1 · SPN-0725-01") becomes that batch */
+    const lb = readyBatches().find(r=>saleBatchLabel(r)===t || (r.batchCode && t.includes(r.batchCode)));
+    if(lb){ row.product = t = stockItemName(lb); row.source = lb.id; }
+    const cands = saleLineCandidates(row);
+    if(row.source && row.source!=='auto' && row.source!=='none' && !cands.some(r=>r.id===row.source)) row.source = 'auto';
+    /* price and unit apply only on a definite pick (a stock item, an exact price-list name
+       or a batch), never on partial typing */
+    const si = readyStockItems().find(x=>x.name===t);
+    const pl = t.length>=3 ? findPriceItem(si? si.crop : (lb? lb.crop : t)) : null;
+    const exact = !!pl && (!!si || !!lb || pl.name.toLowerCase()===t.toLowerCase());
     if(exact){
       if(pl.unit==='trays' && row.unit!=='trays') row.qty = 1;
       row.unit = pl.unit;
       if(pl.unit==='trays' && pl.traySize) row.traySize = pl.traySize;
       if(pl.price) row.unitPrice = pl.price;
     }
-    if(changedBatch || exact){
-      const caret = document.activeElement && document.activeElement.selectionStart;
-      renderSaleItems();
-      const again = document.querySelectorAll('#sale-items tbody tr')[i]?.querySelector('input[list]');
-      if(again){ again.focus(); try{ again.setSelectionRange(caret, caret); }catch(e){} }
-    }
+    /* a definite pick redraws the table; a change in matching stock while typing only redraws
+       this line's stock box, so the field being typed in (and the phone keyboard) is left alone */
+    if(lb || exact) rerenderSaleItemsKeepingCaret(i);
+    else if(saleLineCandidates(row).map(r=>r.id).join(',')!==candsBefore) refreshSaleStockLines();
     return;
   }
   if(f==='unit'){ row.unit = v; renderSaleItems(); return; }
+  if(f==='source'){ row.source = v; renderSaleItems(); return; }
   row[f] = v==='' ? '' : +v;
   const host = document.getElementById('sale-items'); const tr = host && host.querySelectorAll('tbody tr')[i];
   if(tr) tr.children[5].textContent = money(Math.round((+row.qty||0)*(+row.unitPrice||0)));
   const tot = document.getElementById('sale-total'); if(tot) tot.textContent = money(saleDraftTotal());
+  /* the stock notes follow the quantity as it is typed; a line changes what the lines after it can draw */
+  SALE_DRAFT.forEach((rw, j)=>{
+    const note = document.getElementById('sale-stock-note-'+j); if(!note) return;
+    const src = saleLineSource(rw); if(!src.cands.length) return;
+    const leftOf = saleDraftLeftBefore(j);
+    const avail = src.mode==='batch' ? leftOf(src.batch) : src.cands.reduce((a,b)=>a+leftOf(b),0);
+    note.innerHTML = saleStockNote(src, saleRowSeedlings(rw), avail, src.mode==='batch'? src.batch.crop : src.cands[0].crop);
+  });
 }
+/* redraw only the stock boxes under the item fields */
+function refreshSaleStockLines(){ withSoldCache(()=>SALE_DRAFT.forEach((rw, j)=>{ const box = document.getElementById('sale-stock-line-'+j); if(box) box.innerHTML = saleStockLineHTML(rw, j); })); }
 function openSaleModal(batchId){
   const nextNo = nextReceiptNo();
   const readyLines = readyBatches();
-  const preset = (batchId && readyLines.find(r=>r.id===batchId)) ? batchId : (readyLines[0]? readyLines[0].id : null);
+  const preset = (batchId && readyLines.find(r=>r.id===batchId)) ? batchId : null;
   SALE_DRAFT = [ newSaleRow(preset) ];
   openModal('New Cash Sale', `
     <div class="form-grid">
@@ -4108,7 +4244,7 @@ function openSaleModal(batchId){
       <div class="field"><label>Customer GPS <span class="small-muted">(optional - for follow-up route planning)</span></label><input id="f-gps" readonly placeholder="Tap 'Capture location'"></div>
       <div class="field" style="justify-content:flex-end;"><button type="button" class="btn secondary sm" onclick="captureCashSaleGPS()">📍 Capture GPS</button></div>
     </div>
-    <div class="section-title">Items <span class="small-muted" style="font-weight:400;text-transform:none;letter-spacing:0;">· seedling and tray lines from a batch draw the nursery stock down</span><div class="line"></div></div>
+    <div class="section-title">Items <span class="small-muted" style="font-weight:400;text-transform:none;letter-spacing:0;">· seedling and tray lines draw the nursery stock down, oldest ready batches first</span><div class="line"></div></div>
     <div id="sale-items"></div>
     <div class="form-grid" style="margin-top:12px;">
       <div class="field"><label>VAT Treatment</label><select id="f-vat"><option>Exempt - agricultural produce</option><option>Zero-rated</option><option>Standard 16%</option></select></div>
@@ -4121,26 +4257,43 @@ function openSaleModal(batchId){
       if(!cust){ toast('Customer name is required.','err'); return; }
       const rows = SALE_DRAFT.filter(r=>(r.product||'').trim() && (+r.qty||0)>0);
       if(!rows.length){ toast('Add at least one item with a quantity.','err'); return; }
-      const perBatch = {};
+      /* each stock line's seedlings come out of the ready batches now: the batch picked, or
+         the oldest batches first. Other lines of this sale drawing on the same batches count. */
+      const left = new Map();
+      const leftOf = b => left.has(b.id) ? left.get(b.id) : batchRemaining(b);
+      const plan = [];
       for(const r of rows){
         if(r.unit==='trays' && !(+r.traySize>0)){ toast(`Enter the tray size (seedlings per tray) for "${r.product}".`,'err'); return; }
         if(r.unit==='trays' && !trayTypes().some(t=>+t.cells===+r.traySize) && +r.traySize!==(traySizeFromPriceList(r.product)||0)){
-          if(!confirm(`${r.traySize} seedlings per tray is not a registered tray type (${trayTypes().map(t=>t.cells).join(', ')}). Use ${r.traySize} for "${r.product}" anyway? It only affects this receipt's seedling count.`)) return;
+          if(!confirm(`${r.traySize} seedlings per tray is not a registered tray type (${trayTypes().map(t=>t.cells).join(', ')}). Use ${r.traySize} for "${r.product}" anyway? It sets this line's seedling count and how much stock it draws.`)) return;
         }
-        if(r.batchId){
-          if(r.unit!=='trays' && r.unit!=='seedlings'){ toast(`Batch lines are sold in seedlings or trays ("${r.product}").`,'err'); return; }
-          perBatch[r.batchId] = (perBatch[r.batchId]||0) + saleRowSeedlings(r);
+        const src = saleLineSource(r), need = saleRowSeedlings(r), allocs = [];
+        if(src.mode==='batch'){
+          if(need > leftOf(src.batch)){ toast(`Only ${leftOf(src.batch).toLocaleString()} seedlings left in batch ${src.batch.batchCode}.`,'err'); return; }
+          allocs.push({batchId:src.batch.id, batchCode:src.batch.batchCode, seedlings:need});
+          left.set(src.batch.id, leftOf(src.batch) - need);
+        } else if(src.mode==='auto'){
+          const avail = src.cands.reduce((a,b)=>a+leftOf(b),0);
+          if(need > avail){ toast(`Only ${avail.toLocaleString()} seedlings of ${r.product.trim()} are in ready stock. Lower the quantity, or set the line to "Not from nursery stock" if they come from elsewhere.`,'err'); return; }
+          let rest = need;
+          for(const b of src.cands){
+            if(rest<=0) break;
+            const take = Math.min(rest, leftOf(b));
+            if(take>0){ allocs.push({batchId:b.id, batchCode:b.batchCode, seedlings:take}); left.set(b.id, leftOf(b) - take); rest -= take; }
+          }
         }
+        plan.push({r, allocs, mode: src.mode});
       }
-      for(const bid of Object.keys(perBatch)){
-        const b = DATA.sowingRecords.find(x=>x.id===bid);
-        if(b && perBatch[bid] > batchRemaining(b)){ toast(`Only ${batchRemaining(b).toLocaleString()} seedlings left in batch ${b.batchCode}.`,'err'); return; }
-      }
-      const items = rows.map(r=>{
-        const b = r.batchId? DATA.sowingRecords.find(x=>x.id===r.batchId) : null;
-        return { crop: r.product.trim(), qty:+r.qty, unit:r.unit, traySize: r.unit==='trays'? +r.traySize||null : null,
-          seedlings: (r.batchId || r.unit==='seedlings' || r.unit==='trays')? saleRowSeedlings(r) : null,
-          unitPrice:+r.unitPrice||0, total: Math.round((+r.qty||0)*(+r.unitPrice||0)), batchId: r.batchId||null, batchCode: b? b.batchCode : null };
+      const items = plan.map(({r, allocs, mode})=>{
+        /* batchId names the oldest batch drawn on: an older app build that knows only batchId
+           then still takes the line out of stock (this build reads allocations) */
+        const first = allocs[0] || null;
+        const it = { crop: r.product.trim(), qty:+r.qty, unit:r.unit, traySize: r.unit==='trays'? +r.traySize||null : null,
+          seedlings: (allocs.length || r.unit==='seedlings' || r.unit==='trays')? saleRowSeedlings(r) : null,
+          unitPrice:+r.unitPrice||0, total: Math.round((+r.qty||0)*(+r.unitPrice||0)), batchId: first? first.batchId : null, batchCode: first? first.batchCode : null };
+        /* the batches this line drew on (stock is the batch's growth less these) */
+        if(allocs.length){ it.allocations = allocs; it.stockFrom = mode; }
+        return it;
       });
       const total = items.reduce((a,it)=>a+it.total,0);
       const gpsVal = document.getElementById('f-gps').value.split(',').map(s=>parseFloat(s));
@@ -10376,7 +10529,7 @@ function buildReport(key){
   if(key==='sales'){
     const sales = DATA.cashSales.slice().sort((a,b)=>(a.date||'')<(b.date||'')?-1:1);
     const vatOf = s => s.vatAmount!=null ? +s.vatAmount : (s.vat==='Standard 16%' ? Math.round(s.total - s.total/1.16) : 0);
-    const rows = sales.flatMap(s=>saleItems(s).map((it,ix)=>[s.receiptNo+(saleItems(s).length>1? ' ('+(ix+1)+')':''), fmtDate(s.date), s.customer, s.kraPin||'-', it.crop+(it.batchCode? ' ('+it.batchCode+')':''), itemQtyLabel(it), money(it.unitPrice), money(it.total), s.vat, ix===0? money(vatOf(s)) : '', s.payment, s.servedBy]));
+    const rows = sales.flatMap(s=>saleItems(s).map((it,ix)=>[s.receiptNo+(saleItems(s).length>1? ' ('+(ix+1)+')':''), fmtDate(s.date), s.customer, s.kraPin||'-', (()=>{ const src = saleLineSourceText(it); return it.crop + (src ? ' ('+src.replace(/^From /,'')+')' : ''); })(), itemQtyLabel(it), money(it.unitPrice), money(it.total), s.vat, ix===0? money(vatOf(s)) : '', s.payment, s.servedBy]));
     const revenue = sales.reduce((a,b)=>a+b.total,0);
     const vatTotal = sales.reduce((a,b)=>a+vatOf(b),0);
     const byMonth = {}; sales.forEach(s=>{ const m=(s.date||'').slice(0,7); byMonth[m]=(byMonth[m]||0)+s.total; });
@@ -11243,7 +11396,8 @@ function oddTrayLines(){
       const size = +it.traySize>0 ? +it.traySize : null;
       const priced = traySizeFromPriceList(it.crop);
       if(size && (registered.has(size) || size===priced)) return;
-      out.push({ sale:s, idx, legacy, crop:it.crop, qty:+it.qty||0, size, seedlings:itemSeedlings(it), priced, batchId:it.batchId||null });
+      out.push({ sale:s, idx, legacy, crop:it.crop, qty:+it.qty||0, size, seedlings:itemSeedlings(it), priced, batchId:it.batchId||null,
+        batchIds: Array.isArray(it.allocations) ? it.allocations.map(a=>a && a.batchId).filter(Boolean) : (it.batchId ? [it.batchId] : []) });
     });
   });
   return out;
@@ -11253,7 +11407,7 @@ function openRecomputeTraysModal(){
   const lines = oddTrayLines();
   const types = trayTypes(), def = defaultTrayType();
   const target = l => l.priced || +(document.getElementById('rt-target')?.value || def.cells);
-  const rowsHTML = () => lines.map(l=>{ const t = target(l); return `<tr><td class="mono">${esc(l.sale.receiptNo||'')}<div class="cell-sub">${fmtDate(l.sale.date)} · ${esc(l.sale.customer||'')}</div></td><td>${esc(l.crop)}${l.batchId? '' : '<div class="cell-sub">not linked to a batch</div>'}</td><td class="mono" style="text-align:right;">${l.qty}</td><td class="mono" style="text-align:right;">${l.size||'-'} → <b>${t}</b>${l.priced? '<div class="cell-sub">priced size</div>' : ''}</td><td class="mono" style="text-align:right;">${l.seedlings.toLocaleString()} → <b>${(l.qty*t).toLocaleString()}</b></td></tr>`; }).join('');
+  const rowsHTML = () => lines.map(l=>{ const t = target(l); return `<tr><td class="mono">${esc(l.sale.receiptNo||'')}<div class="cell-sub">${fmtDate(l.sale.date)} · ${esc(l.sale.customer||'')}</div></td><td>${esc(l.crop)}${(l.batchIds||[]).length? '' : '<div class="cell-sub">not linked to a batch</div>'}</td><td class="mono" style="text-align:right;">${l.qty}</td><td class="mono" style="text-align:right;">${l.size||'-'} → <b>${t}</b>${l.priced? '<div class="cell-sub">priced size</div>' : ''}</td><td class="mono" style="text-align:right;">${l.seedlings.toLocaleString()} → <b>${(l.qty*t).toLocaleString()}</b></td></tr>`; }).join('');
   openModal('Past tray receipts', `
     <p class="small-muted" style="margin:0 0 10px;line-height:1.55;">${lines.length? `${lines.length} tray line${lines.length===1?'':'s'} on past receipts carry a tray size that is not a registered tray type. Their seedling equivalents, and the stock drawn down from their batches, were counted at that size. Recomputing sets each line to the crop's priced tray size where one exists, otherwise to the tray type chosen below. Prices and receipt totals do not change'+(SERVER_MODE? ', and the previous state stays in Version history.' : '. This workspace has no version history, so download a backup first if you may need the old figures.')+'` : 'Every tray line on past receipts already uses a registered tray type or a priced size. Nothing to recompute.'}</p>
     ${lines.length? `
@@ -11271,11 +11425,28 @@ function applyRecomputeTrays(lines, target){
   lines.forEach(l=>{
     const t = target(l);
     if(l.legacy){ l.sale.traySize = t; }
-    else { const it = l.sale.items[l.idx]; it.traySize = t; it.seedlings = l.qty * t; }
+    else {
+      const it = l.sale.items[l.idx]; const oldS = itemSeedlings(it);
+      it.traySize = t; it.seedlings = l.qty * t;
+      /* the batches the line drew on follow the recomputed count: extra seedlings come from
+         its batches that still have stock, oldest first (anything beyond that stays on the
+         last one, where stock floors at zero); a reduction goes back newest first */
+      if(Array.isArray(it.allocations) && it.allocations.length){
+        const al = it.allocations, delta = Math.round(it.seedlings - oldS);
+        if(delta > 0){
+          let rest = delta;
+          for(const x of al){ if(rest<=0) break; const bt = DATA.sowingRecords.find(r=>r.id===x.batchId); const take = Math.min(rest, bt? batchRemaining(bt) : 0); if(take>0){ x.seedlings = (+x.seedlings||0) + take; rest -= take; } }
+          if(rest>0) al[al.length-1].seedlings = (+al[al.length-1].seedlings||0) + rest;
+        } else if(delta < 0){
+          let rest = -delta;
+          for(let k=al.length-1; k>=0 && rest>0; k--){ const take = Math.min(rest, +al[k].seedlings||0); al[k].seedlings = (+al[k].seedlings||0) - take; rest -= take; }
+        }
+      }
+    }
     /* a multi-item receipt keeps its seedling total in qty; on a legacy single-line receipt
        qty IS the tray count and must stay as it is */
     if(!l.legacy) l.sale.qty = saleItems(l.sale).reduce((a,it)=>a+itemSeedlings(it),0);
-    if(l.batchId) batches.add(l.batchId);
+    (l.batchIds||[]).forEach(id=>batches.add(id));
   });
   const detail = lines.map(l=>`${l.sale.receiptNo||'?'} ${l.crop} ${l.size||'-'}→${target(l)}`).slice(0,12).join('; ') + (lines.length>12? '; …' : '');
   logActivity(`${CURRENT.name} recomputed tray sizes on ${lines.length} past receipt line${lines.length===1?'':'s'} (${batches.size} batch${batches.size===1?'':'es'} affected): ${detail}`);

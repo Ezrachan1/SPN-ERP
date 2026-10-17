@@ -52,6 +52,34 @@
   }
   window.SPN_MOBILE = { shareBlob: shareBlob, platform: cap.getPlatform ? cap.getPlatform() : 'android' };
 
+  /* 3a) the field being typed in stays visible above the keyboard (the app shrinks when the
+     keyboard opens; this brings the focused field back into view once it has) */
+  function revealFocused(){
+    var el = document.activeElement;
+    if(!el || !/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) || !el.getBoundingClientRect) return;
+    var r = el.getBoundingClientRect();
+    /* inside a dialog, the part the user can see sits between its sticky title and Save bar */
+    var top = 8, bottom = window.innerHeight - 8;
+    var m = el.closest && el.closest('.modal');
+    if(m){
+      var mr = m.getBoundingClientRect(), hd = m.querySelector('.modal-head'), ft = m.querySelector('.modal-foot');
+      top = Math.max(top, hd ? hd.getBoundingClientRect().bottom : mr.top);
+      bottom = Math.min(bottom, ft ? ft.getBoundingClientRect().top : mr.bottom);
+    }
+    if(r.top >= top && r.bottom <= bottom) return;
+    try{ el.scrollIntoView({ block: 'center', behavior: 'smooth' }); }catch(e){ el.scrollIntoView(); }
+  }
+  document.addEventListener('focusin', function(){ setTimeout(revealFocused, 350); });
+  /* only when the keyboard opens (the height shrinks, the width stays): rotating the phone or
+     resizing a split screen must not pull the page back to a field the user has left */
+  var lastW = window.innerWidth, lastH = window.innerHeight;
+  window.addEventListener('resize', function(){
+    var w = window.innerWidth, hgt = window.innerHeight;
+    var opened = (w === lastW) && (hgt < lastH - 80);
+    lastW = w; lastH = hgt;
+    if(opened) setTimeout(revealFocused, 80);
+  });
+
   /* 3b) notification-bar notifications (local, no Google/Huawei push services needed,
      so they work on HMS phones too). One channel per tone; the user's tone in the
      profile picks the channel. Reminders are scheduled by the app for dated items. */

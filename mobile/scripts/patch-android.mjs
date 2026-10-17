@@ -80,3 +80,67 @@ if (fs.existsSync(styles)) {
   let c = fs.existsSync(colors) ? fs.readFileSync(colors, 'utf8') : '<?xml version="1.0" encoding="utf-8"?>\n<resources>\n</resources>\n';
   if (!c.includes('name="spnBars"')) { c = c.replace('</resources>', '    <color name="spnBars">#1E2B22</color>\n</resources>'); fs.writeFileSync(colors, c); console.log('colors.xml: spnBars added'); }
 }
+
+/* The on-screen keyboard. Android 15 draws apps edge to edge and no longer resizes them for
+   the keyboard; Capacitor's margin handler (adjustMarginsForEdgeToEdge) keeps the WebView
+   clear of the status and navigation bars but ignores the keyboard, so it covered fields
+   near the bottom of the screen (the sign-in password). MainActivity replaces that handler
+   with one that also lifts the WebView above the keyboard, and the activity resizes for the
+   keyboard on older Android versions too. */
+{
+  let mx = fs.readFileSync(manifest, 'utf8');
+  if (!mx.includes('android:windowSoftInputMode')) {
+    const mx2 = mx.replace(/android:name="\.MainActivity"/, 'android:name=".MainActivity"\n            android:windowSoftInputMode="adjustResize"');
+    if (mx2 !== mx) { fs.writeFileSync(manifest, mx2); console.log('AndroidManifest.xml: keyboard resizes the app (adjustResize)'); }
+  } else console.log('AndroidManifest.xml: keyboard mode already set');
+  const javaRoot = path.join(root, 'android', 'app', 'src', 'main', 'java');
+  const find = dir => { for (const e of fs.readdirSync(dir, { withFileTypes: true })) { const p = path.join(dir, e.name); if (e.isDirectory()) { const r = find(p); if (r) return r; } else if (e.name === 'MainActivity.java') return p; } return null; };
+  const main = fs.existsSync(javaRoot) ? find(javaRoot) : null;
+  if (main) {
+    const cur = fs.readFileSync(main, 'utf8');
+    if (!cur.includes('SPN-KEYBOARD-INSETS')) {
+      const pkgName = (cur.match(/^package\s+([\w.]+);/m) || [])[1] || 'com.spn.os';
+      fs.writeFileSync(main, `package ${pkgName};
+
+import android.os.Build;
+import android.os.Bundle;
+import android.util.TypedValue;
+import android.view.ViewGroup.MarginLayoutParams;
+import android.webkit.WebView;
+import androidx.core.graphics.Insets;
+import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowInsetsCompat;
+import com.getcapacitor.BridgeActivity;
+
+/* SPN-KEYBOARD-INSETS: written by mobile/scripts/patch-android.mjs */
+public class MainActivity extends BridgeActivity {
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        // Same condition as Capacitor's "auto" edge-to-edge margins: Android 15+ without the opt-out.
+        if (Build.VERSION.SDK_INT < 35 || getBridge() == null) return;
+        TypedValue value = new TypedValue();
+        boolean optedOut = getTheme().resolveAttribute(android.R.attr.windowOptOutEdgeToEdgeEnforcement, value, true) && value.data != 0;
+        if (optedOut) return;
+        WebView webView = getBridge().getWebView();
+        if (webView == null) return;
+        // Replaces Capacitor's handler: keep clear of the system bars, and of the keyboard while it is open.
+        ViewCompat.setOnApplyWindowInsetsListener(webView, (v, insets) -> {
+            Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() | WindowInsetsCompat.Type.displayCutout());
+            Insets ime = insets.getInsets(WindowInsetsCompat.Type.ime());
+            MarginLayoutParams mlp = (MarginLayoutParams) v.getLayoutParams();
+            mlp.leftMargin = bars.left;
+            mlp.rightMargin = bars.right;
+            mlp.topMargin = bars.top;
+            mlp.bottomMargin = Math.max(bars.bottom, ime.bottom);
+            v.setLayoutParams(mlp);
+            return WindowInsetsCompat.CONSUMED;
+        });
+        ViewCompat.requestApplyInsets(webView);
+    }
+}
+`);
+      console.log('MainActivity.java: keyboard-aware insets handler written');
+    } else console.log('MainActivity.java: keyboard handler already present');
+  }
+}
