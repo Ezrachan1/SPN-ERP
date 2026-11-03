@@ -98,7 +98,7 @@ if (fs.existsSync(styles)) {
   const main = fs.existsSync(javaRoot) ? find(javaRoot) : null;
   if (main) {
     const cur = fs.readFileSync(main, 'utf8');
-    if (!cur.includes('SPN-KEYBOARD-INSETS')) {
+    if (!cur.includes('SPN-MAINACTIVITY-2')) {
       const pkgName = (cur.match(/^package\s+([\w.]+);/m) || [])[1] || 'com.spn.os';
       fs.writeFileSync(main, `package ${pkgName};
 
@@ -112,10 +112,12 @@ import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 import com.getcapacitor.BridgeActivity;
 
-/* SPN-KEYBOARD-INSETS: written by mobile/scripts/patch-android.mjs */
+/* SPN-MAINACTIVITY-2: written by mobile/scripts/patch-android.mjs (keyboard insets, downloads plugin) */
 public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
+        // Saves exports to Downloads and posts the "Download complete" notification.
+        registerPlugin(SpnDownloadsPlugin.class);
         super.onCreate(savedInstanceState);
         // Same condition as Capacitor's "auto" edge-to-edge margins: Android 15+ without the opt-out.
         if (Build.VERSION.SDK_INT < 35 || getBridge() == null) return;
@@ -140,7 +142,25 @@ public class MainActivity extends BridgeActivity {
     }
 }
 `);
-      console.log('MainActivity.java: keyboard-aware insets handler written');
-    } else console.log('MainActivity.java: keyboard handler already present');
+      console.log('MainActivity.java: written (keyboard insets, downloads plugin)');
+    } else console.log('MainActivity.java: up to date');
+  }
+}
+
+/* Downloads. The WebView cannot save files itself, so exports used to go to the app cache and
+   the share sheet: nothing reached the Downloads folder or the notification bar. The plugin
+   in scripts/android/SpnDownloadsPlugin.java (registered by MainActivity) saves each file to
+   Downloads/SPN OS and posts a "Download complete" notification; mobile-shim.js calls it. */
+{
+  const javaRoot = path.join(root, 'android', 'app', 'src', 'main', 'java');
+  const find = dir => { for (const e of fs.readdirSync(dir, { withFileTypes: true })) { const p = path.join(dir, e.name); if (e.isDirectory()) { const r = find(p); if (r) return r; } else if (e.name === 'MainActivity.java') return p; } return null; };
+  const main = fs.existsSync(javaRoot) ? find(javaRoot) : null;
+  if (main) {
+    const pkgName = (fs.readFileSync(main, 'utf8').match(/^package\s+([\w.]+);/m) || [])[1] || 'com.spn.os';
+    const src = fs.readFileSync(path.join(root, 'scripts', 'android', 'SpnDownloadsPlugin.java'), 'utf8').replace(/^package\s+[\w.]+;/m, 'package ' + pkgName + ';');
+    const dest = path.join(path.dirname(main), 'SpnDownloadsPlugin.java');
+    const cur = fs.existsSync(dest) ? fs.readFileSync(dest, 'utf8') : '';
+    if (cur !== src) { fs.writeFileSync(dest, src); console.log('SpnDownloadsPlugin.java: copied into the Android project'); }
+    else console.log('SpnDownloadsPlugin.java: up to date');
   }
 }

@@ -10,10 +10,12 @@ import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 import com.getcapacitor.BridgeActivity;
 
-/* SPN-KEYBOARD-INSETS: written by mobile/scripts/patch-android.mjs */
+/* SPN-MAINACTIVITY-2: written by mobile/scripts/patch-android.mjs (keyboard insets, downloads plugin) */
 public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
+        // Saves exports to Downloads and posts the "Download complete" notification.
+        registerPlugin(SpnDownloadsPlugin.class);
         super.onCreate(savedInstanceState);
         // Same condition as Capacitor's "auto" edge-to-edge margins: Android 15+ without the opt-out.
         if (Build.VERSION.SDK_INT < 35 || getBridge() == null) return;

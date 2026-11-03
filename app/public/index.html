@@ -518,6 +518,10 @@ table:not(.dtable) tbody tr:hover{background:var(--mint-soft);}
 .pw-eye svg{width:17px;height:17px;}
 .lm-dot{display:inline-block;width:10px;height:10px;border-radius:50%;vertical-align:-1px;margin-right:4px;}
 .leaflet-container{font-family:var(--font-ui);font-size:12px;}
+/* a map keeps its layering inside its own box: Leaflet and Google Maps stack tiles and the
+   +/- controls with z-index values up to 1000, which otherwise rise above the phone side
+   menu (250), dialogs (100) and dropdowns (150) */
+.leaflet-container,.gm-style,#leads-map-canvas,#acreage-map-canvas{isolation:isolate;z-index:0;}
 .acreage-pt span{display:block;width:16px;height:16px;border-radius:50%;background:#315C3A;border:2px solid #fff;box-shadow:0 0 0 1.5px #315C3A;cursor:grab;}
 .suggest-host{position:relative;}
 .place-suggest{position:absolute;z-index:160;left:0;right:0;top:calc(100% + 4px);background:var(--surface);border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow-2);max-height:230px;overflow:auto;padding:4px;}
@@ -2698,7 +2702,24 @@ function positionMenu(menu, ev){
   let x = ev.clientX - r.width + 10, y = ev.clientY + 8;
   if(x<8) x = ev.clientX;
   if(y + r.height > window.innerHeight - 8) y = ev.clientY - r.height - 6;
+  /* never past an edge of the screen, however narrow the phone */
+  x = Math.max(8, Math.min(x, window.innerWidth - r.width - 8));
+  y = Math.max(8, y);
   menu.style.left = x+'px'; menu.style.top = y+'px';
+}
+/* a dropdown under a top-bar button: right edge lined up with the button where it fits,
+   otherwise slid along so it stays fully on screen (on a phone the bell and theme buttons
+   sit near the left, and a right-aligned panel used to open off the left edge) */
+function placeDropdown(pop, anchorRect){
+  const vw = window.innerWidth, vh = window.innerHeight, m = 8;
+  pop.style.position = 'fixed';
+  const w = Math.min(330, vw - m*2);
+  pop.style.width = w+'px';
+  let left = anchorRect.right - w;
+  left = Math.max(m, Math.min(left, vw - m - w));
+  pop.style.left = left+'px'; pop.style.right = 'auto';
+  pop.style.top = (anchorRect.bottom + 8)+'px';
+  pop.style.maxHeight = Math.max(160, vh - anchorRect.bottom - 8 - m)+'px';
 }
 function openRowMenu(ev, tableId, rowId){
   ev.stopPropagation();
@@ -2991,9 +3012,7 @@ function toggleBellPanel(ev){
   const rect = ev.currentTarget.getBoundingClientRect();
   const pop = document.createElement('div');
   pop.className='search-pop'; pop.id='bell-pop';
-  pop.style.position='fixed';
-  pop.style.top=(rect.bottom+8)+'px';
-  pop.style.right=Math.max(10, window.innerWidth-rect.right)+'px';
+  placeDropdown(pop, rect);
   document.body.appendChild(pop);
   renderBellPanelBody();
 }
@@ -3058,7 +3077,9 @@ function renderDashboard(root){
       <div class="kpi-row"><div class="kpi-icon">${ICONS.stock}</div>${st('green','Ready')}</div>
       <div class="k-label">Trays Ready for Sale</div>
       <div class="k-value">${readyTrays? '≈ '+readyTrays.toLocaleString() : (readySeedlings? '< 1' : '0')}</div>
-      <div class="k-sub">${readyRows.length} batch${readyRows.length===1?'':'es'} at Ready for Sale · ${readySeedlings.toLocaleString()} seedlings${readyTrays !== readyRows.reduce((a,x)=>a+trayCountOf(x.r.crop, x.viableQty),0)? ' (part trays pooled per crop)' : ''}${growingSeedlings>0? ' · '+(growingTrays? growingTrays.toLocaleString()+' tray'+(growingTrays===1?'':'s') : '< 1 tray')+' still growing, not counted here' : ''}</div>
+      <div class="k-sub">${readyRows.length} batch${readyRows.length===1?'':'es'} at Ready for Sale · ${readySeedlings.toLocaleString()} seedlings${readyTrays !== readyRows.reduce((a,x)=>a+trayCountOf(x.r.crop, x.viableQty),0)? ' (part trays pooled per crop)' : ''}${growingSeedlings>0? ' · '+(growingTrays? growingTrays.toLocaleString()+' tray'+(growingTrays===1?'':'s') : '< 1 tray')+' still growing, not counted here' : ''}${(()=>{ const n = unlinkedSaleLines().length; if(!n) return ''; const txt = n+' past sale line'+(n===1?'':'s')+' not deducted';
+        /* a link only for those who can open Seedling Stock; everyone else still sees the figure is high */
+        return CURRENT.access.includes('seedlingstock')? ` · <a style="color:var(--warn);cursor:pointer;text-decoration:underline;" onclick="nav('seedlingstock')">${txt}</a>` : ` · <span style="color:var(--warn);">${txt}</span>`; })()}</div>
     </div>`;
     })()}
     <div class="card kpi b3">
@@ -3474,9 +3495,7 @@ function toggleThemeMenu(ev){
   const rect = ev.currentTarget.getBoundingClientRect();
   const pop = document.createElement('div');
   pop.className='search-pop'; pop.id='theme-pop';
-  pop.style.position='fixed';
-  pop.style.top=(rect.bottom+8)+'px';
-  pop.style.right=Math.max(10, window.innerWidth-rect.right)+'px';
+  placeDropdown(pop, rect);
   pop.innerHTML = `
     <div style="padding:6px 10px 8px;border-bottom:1px solid var(--line-soft);"><b style="font-size:12.6px;color:var(--heading);">Appearance</b></div>
     ${['light','dark','auto'].map(m=>`
@@ -3730,7 +3749,7 @@ function buildReceiptPDF(id){
 }
 function downloadReceiptPDF(id){
   const r = buildReceiptPDF(id); if(!r) return;
-  r.doc.save(r.fname); /* in the SPN OS app this opens the share sheet (WhatsApp attaches the PDF) */
+  r.doc.save(r.fname); /* in the SPN OS app this saves to Downloads/SPN OS with a Download complete notification */
   logActivity(`Downloaded receipt ${r.s.receiptNo} (PDF).`);
 }
 /* ---------- sharing the receipt with the customer ---------- */
@@ -3762,7 +3781,7 @@ function sharePdfDocument(doc, fname, text, phone){
     toast('The receipt PDF has been downloaded. In the WhatsApp chat that opened, tap the paperclip and attach it.');
   };
   if(SPN_CONFIG.mobile && window.SPN_MOBILE && window.SPN_MOBILE.shareBlob && blob){
-    Promise.resolve(window.SPN_MOBILE.shareBlob(blob, fname, {text, dialogTitle:'Send the receipt (choose WhatsApp)'})).catch(()=>toast('Could not open the share sheet.','err'));
+    Promise.resolve(window.SPN_MOBILE.shareBlob(blob, fname, {text, dialogTitle:'Send the receipt (choose WhatsApp)'})).catch(e=>{ if(!/cancel/i.test(String((e&&e.message)||e))) toast('Could not open the share sheet.','err'); });
     return 'sheet';
   }
   try{
@@ -3818,7 +3837,7 @@ function offerReceiptShare(id){
     <div style="display:flex;gap:8px;flex-wrap:wrap;">
       <button class="btn sm leaf" onclick="whatsappReceipt(${jsArg(s.id)})">WhatsApp (PDF)</button>
       <button class="btn sm secondary" onclick="emailReceipt(${jsArg(s.id)}, true)">Email${EMAIL_ENABLED? ' PDF' : ''} receipt</button>
-      <button class="btn sm secondary" onclick="downloadReceiptPDF(${jsArg(s.id)})">${SPN_CONFIG.mobile? 'Share PDF…' : 'Download PDF'}</button>
+      <button class="btn sm secondary" onclick="downloadReceiptPDF(${jsArg(s.id)})">Download PDF</button>
     </div>
     <small class="small-muted" style="display:block;margin-top:10px;">${receiptShareHint()}</small>
   `, [{label:'Done', cls:'secondary', action:closeModal}]);
@@ -3875,6 +3894,10 @@ function withSoldCache(fn){ const outer = SOLD_CACHE; if(!outer) SOLD_CACHE = so
 function soldFromBatch(r){ return SOLD_CACHE ? (SOLD_CACHE.get(r.id)||0) : DATA.cashSales.reduce((a,s)=>a + saleItems(s).reduce((x,it)=>x+lineDrawOn(it, r.id),0), 0); }
 function batchRemaining(r){ if(r.closed) return 0; return Math.max(0, Math.round(batchViable(r) - soldFromBatch(r))); }
 function readyBatches(){ return DATA.sowingRecords.filter(r=>computeStage(r).stage===4 && batchRemaining(r)>0); }
+/* batches a sale can draw on: ready, or hardening (60% of the way to ready or more), which a
+   nursery sells from when ready stock runs short. A growing batch that gave seedlings to a sale
+   without being charged for them would show its full count as ready when it turns ready. */
+function sellableBatches(){ return DATA.sowingRecords.filter(r=>computeStage(r).stage>=3 && batchRemaining(r)>0); }
 function nextReceiptNo(){ const nums = DATA.cashSales.map(s=>parseInt(String(s.receiptNo||'').replace(/\D/g,''),10)).filter(n=>!isNaN(n)); return 'SPN-R-'+((nums.length? Math.max(...nums) : 1041)+1); }
 /* ---------------- price list ----------------
    Managed product/commodity prices. Picking a product on a sale line fills its
@@ -3950,12 +3973,180 @@ function saleItems(s){
   const traySize = +s.traySize>0 ? +s.traySize : (unit==='trays' ? (traySizeFromPriceList(s.crop) || defaultTrayCells()) : null);
   const qty = +s.qty||0;
   const seedlings = unit==='trays' ? qty*(traySize||0) : (unit==='seedlings' ? qty : 0);
-  return [{crop:s.crop, qty, unit, traySize, seedlings, unitPrice:+s.unitPrice||0, total:+s.total||0, batchId:s.batchId||null, batchCode:s.batchCode||null}];
+  const legacy = {crop:s.crop, qty, unit, traySize, seedlings, unitPrice:+s.unitPrice||0, total:+s.total||0, batchId:s.batchId||null, batchCode:s.batchCode||null};
+  /* links made later by "Link past sales to stock" live on the receipt itself */
+  if(Array.isArray(s.allocations)) legacy.allocations = s.allocations;
+  if(s.stockFrom) legacy.stockFrom = s.stockFrom;
+  return [legacy];
 }
 function itemSeedlings(it){
   if(it.seedlings!=null) return +it.seedlings||0;
   if(it.unit==='trays') return (+it.qty||0) * (+it.traySize>0 ? +it.traySize : (traySizeFromPriceList(it.crop) || defaultTrayCells()));
   return (it.unit==='seedlings'||!it.unit) ? +it.qty||0 : 0;
+}
+/* ---- sale lines that never drew on stock ----
+   A seedling or tray line that took no seedlings out of a batch leaves ready stock too high:
+   lines recorded before sales drew on stock by themselves (price-list and typed lines), and
+   lines sold while the crop's batches were not ready yet. They are found here and linked to
+   the batches they most likely came from: batches of the crop the line names, ready by the
+   sale date first, then those hardening by then, oldest first, never more than a batch grew.
+   Nothing about money changes. */
+/* a line that deliberately draws nothing: kept off stock at the till, sold with no batch ready
+   or hardening, or found here with no batch to draw on */
+const SALE_NO_DRAW = ['none','nostock','unmatched'];
+const RECEIPT_ORDER = new Intl.Collator(undefined, {numeric:true});
+function saleLineOrder(a, b){
+  const da = String(a.sale.date||''), db = String(b.sale.date||'');
+  return (da<db? -1 : (da>db? 1 : 0)) || RECEIPT_ORDER.compare(String(a.sale.receiptNo||''), String(b.sale.receiptNo||'')) || a.idx-b.idx;
+}
+function unlinkedSaleLines(){
+  const out = [];
+  (DATA.cashSales||[]).forEach(s=>saleItems(s).forEach((it, idx)=>{
+    if(it.unit!=='seedlings' && it.unit!=='trays') return;
+    if(Array.isArray(it.allocations) || it.batchId || SALE_NO_DRAW.includes(it.stockFrom)) return;
+    if(!(itemSeedlings(it) > 0)) return;
+    out.push({sale:s, idx, it, legacy: !(Array.isArray(s.items) && s.items.length), key: s.id+'#'+idx});
+  }));
+  return out.sort(saleLineOrder);
+}
+/* the draws every line would make, replayed in date order. A line the cashier tied to one batch
+   keeps its draw. Lines that drew by themselves (at the till, or linked here before) are
+   replayed with the unlinked ones, so an older sale takes the older batch and a later sale
+   moves on to the next batch, instead of the older sale finding its batch used up by sales
+   made after it. skip: keys of unlinked lines left out (bought in, not grown here). */
+function planPastSaleLinks(skip){
+  skip = skip || new Set();
+  const DAY = 86400000, ms = d => { const t = new Date(String(d||'')+'T00:00:00').getTime(); return isNaN(t) ? null : t; };
+  const today = todayISO();
+  /* each batch's names and dates are worked out once: this runs over every past line */
+  const batches = fifoBatches(DATA.sowingRecords.filter(r=>r.dateSown && ms(r.dateSown)!=null));
+  const info = new Map(batches.map(r=>[r.id, Object.assign(batchNames(r), {sown: ms(r.dateSown), days: +r.readyDays || 30})]));
+  const cap = new Map(batches.map(r=>[r.id, batchViable(r)]));
+  const open = [], moving = [];
+  (DATA.cashSales||[]).forEach(s=>saleItems(s).forEach((it, idx)=>{
+    if(it.unit!=='seedlings' && it.unit!=='trays') return;
+    const l = {sale:s, idx, it, legacy: !(Array.isArray(s.items) && s.items.length), key: s.id+'#'+idx};
+    if(Array.isArray(it.allocations)){
+      /* a line whose batch was deleted (or lost its sowing date) stays as it is */
+      if((it.stockFrom==='auto' || it.stockFrom==='linked') && it.allocations.length && it.allocations.every(a=>a && cap.has(a.batchId))) moving.push(Object.assign(l, {moving:true}));
+      else it.allocations.forEach(a=>{ if(a && cap.has(a.batchId)) cap.set(a.batchId, cap.get(a.batchId) - (+a.seedlings||0)); });
+    }
+    else if(it.batchId){ if(cap.has(it.batchId)) cap.set(it.batchId, cap.get(it.batchId) - itemSeedlings(it)); }
+    else if(!SALE_NO_DRAW.includes(it.stockFrom) && itemSeedlings(it) > 0) open.push(Object.assign(l, {skipped: skip.has(l.key)}));
+  }));
+  /* how far along a batch was on a day, as computeStage() reckons it: 100 is ready, 60 hardening */
+  const pctOn = (m, t) => m.days>0 ? Math.round(Math.max(0, Math.round((t - m.sown)/DAY))/m.days*100) : 100;
+  /* most lines share a few price-list names: a name's text and the batches it matches (oldest
+     first) are worked out once */
+  const named = new Map(), pos = new Map(batches.map((r,i)=>[r.id, i])), byId = new Map(batches.map(r=>[r.id, r]));
+  const namedOf = text => {
+    if(!named.has(text)){ const T = normCropText(text), crop = canonicalCrop(text); named.set(text, {T, list: batches.filter(r=>textNamesCrop(T, crop, info.get(r.id)))}); }
+    return named.get(text);
+  };
+  return [...open, ...moving].sort(saleLineOrder).map(l=>{
+    if(l.skipped) return Object.assign(l, {allocs:[], short:0, matched:false, hadCands:false});
+    const date = l.sale.date || today, t = ms(date)!=null ? ms(date) : ms(today), {T, list} = namedOf(String(l.it.crop||''));
+    /* a line the till drew keeps the batches it drew on as candidates */
+    const own = new Set(l.moving ? l.it.allocations.map(a=>a && a.batchId).filter(id=>byId.has(id)) : []);
+    const extra = [...own].filter(id=>!list.some(r=>r.id===id)).map(id=>byId.get(id));
+    const pool = extra.length ? [...list, ...extra].sort((a,b)=>pos.get(a.id)-pos.get(b.id)) : list;
+    const tierOf = r => { const p = pctOn(info.get(r.id), t); return p>=100 ? 1 : (p>=60 ? 2 : 0); };
+    const cands = pool.filter(r=>{
+      if(own.has(r.id)) return true;
+      if(info.get(r.id).sown > t) return false;
+      /* a closed batch gave nothing after it closed, and the till never draws on one */
+      if(r.closed && (l.moving || (r.closedAt && r.closedAt < date))) return false;
+      return tierOf(r) > 0;
+    });
+    /* narrowed to a variety the line names among batches with stock left, as the till does */
+    const live = cands.filter(r=>cap.get(r.id) > 0);
+    const byVariety = live.filter(r=>textNamesVariety(T, info.get(r.id).vwords));
+    const use = byVariety.length ? byVariety : live;
+    /* a till line falls back on the batches it drew on when the variety's batches run short */
+    const order = [...use.filter(r=>tierOf(r)===1), ...use.filter(r=>tierOf(r)!==1), ...live.filter(r=>own.has(r.id) && !use.includes(r))];
+    let need = Math.round(itemSeedlings(l.it)); const allocs = [];
+    for(const b of order){ if(need<=0) break; const c = cap.get(b.id), take = Math.min(need, c); if(take>0){ allocs.push({batchId:b.id, batchCode:b.batchCode, seedlings:take}); cap.set(b.id, c - take); need -= take; } }
+    const changed = !!l.moving && JSON.stringify(allocs.map(a=>[a.batchId, a.seedlings])) !== JSON.stringify(l.it.allocations.map(a=>[a && a.batchId, Math.round(+(a && a.seedlings)||0)]));
+    return Object.assign(l, {allocs, short: need, matched: allocs.length>0, hadCands: cands.length>0, changed});
+  });
+}
+/* lines the Admin unticked in the open modal (bought in, not grown here) */
+let LPS_SKIP = new Set();
+function openLinkPastSalesModal(){
+  if(!canManage()){ toast('Only Admin/MD or the Super User can link past sales to stock.','err'); return; }
+  LPS_SKIP = new Set();
+  const n = unlinkedSaleLines().length;
+  openModal('Link past sales to stock', `<div id="lps-body">${linkPastSalesBody()}</div>`, n? [
+    {label:'Close', cls:'secondary', action:closeModal},
+    {label:'Link ticked lines', cls:'secondary', action:()=>applyPastSaleLinks(false)},
+    {label:'Link ticked, mark the rest not from stock', cls:'leaf', action:()=>applyPastSaleLinks(true)},
+  ] : [{label:'Close', cls:'secondary', action:closeModal}], {wide:true});
+}
+function linkPastSalesBody(){
+  const all = planPastSaleLinks(LPS_SKIP);
+  const lines = all.filter(p=>!p.moving), moved = all.filter(p=>p.moving && p.changed && p.allocs.length && !(p.short > 0));
+  if(!lines.length) return '<p class="small-muted" style="margin:0;">Every seedling and tray line on past receipts already draws on stock.</p>';
+  const ticked = lines.filter(p=>!p.skipped && p.matched).length, rest = lines.length - ticked;
+  const byId = new Map(DATA.sowingRecords.map(r=>[r.id, r]));
+  const drawText = p => p.allocs.map(a=>{
+    const b = byId.get(a.batchId), early = b && (computeStage(b).readyDate||'') > (p.sale.date||'');
+    return esc(a.batchCode)+' ('+a.seedlings.toLocaleString()+')'+(early? ' <span class="small-muted">hardening then</span>' : '')+(b && b.closed? ' <span class="small-muted">closed</span>' : '');
+  }).join(', ');
+  const rows = lines.slice(0, 300).map(p=>`<tr>
+      <td><input type="checkbox" ${!p.skipped && p.matched? 'checked' : ''} ${p.skipped || p.matched? '' : 'disabled'} onchange="toggleLinkPastLine(${jsArg(p.key)}, this.checked)" aria-label="Link this line"></td>
+      <td class="mono">${esc(p.sale.receiptNo||'')}<div class="cell-sub">${fmtDate(p.sale.date)}</div></td>
+      <td>${esc(p.it.crop||'')}<div class="cell-sub">${Math.round(itemSeedlings(p.it)).toLocaleString()} seedlings</div></td>
+      <td>${p.skipped? '<span class="small-muted">Left out: not from nursery stock</span>'
+        : p.matched? drawText(p)+(p.short>0? `<div class="cell-sub" style="color:var(--warn);">${p.short.toLocaleString()} more than these batches had left</div>` : '')
+        : `<span class="small-muted">${p.hadCands? 'Batches of this crop were used up by earlier sales' : 'No batch of this crop ready or hardening by the sale date'}</span>`}</td>
+    </tr>`).join('');
+  return `
+    <p class="small-muted" style="margin:0 0 10px;line-height:1.55;">${lines.length} seedling or tray line${lines.length===1?'':'s'} on past receipts never took seedlings out of a batch, so ready stock has not gone down for ${lines.length===1?'it':'them'}. Each ticked line is matched to batches of the crop it names: those ready by the sale date first, then those hardening by then, oldest first, never more than a batch grew. Untick any line whose seedlings were bought in, not grown here. Prices and totals do not change.</p>
+    <div class="table-scroll" style="max-height:340px;"><table><thead><tr><th style="width:28px;"><input type="checkbox" ${LPS_SKIP.size? '' : 'checked'} onchange="toggleLinkPastAll(this.checked)" aria-label="Tick every line"></th><th>Receipt</th><th>Item</th><th>Draws on</th></tr></thead><tbody>${rows}</tbody></table></div>
+    ${lines.length>300? `<div class="small-muted" style="margin-top:6px;">Showing the first 300 of ${lines.length}; the buttons act on all ${lines.length}.</div>` : ''}
+    <div class="small-muted" style="margin-top:8px;line-height:1.55;"><b>${ticked}</b> line${ticked===1?'':'s'} will draw on stock${rest? ' · '+rest+' will not' : ''}${moved.length && ticked? ` · ${moved.length} later line${moved.length===1?'':'s'} that drew on stock by ${moved.length===1?'itself moves':'themselves move'} to a newer batch so the older sales come first` : ''}.${rest? ' "Mark the rest" records the lines that will not draw as not from nursery stock, so they stop showing here.' : ''}</div>`;
+}
+function refreshLinkPastSales(){
+  const host = document.getElementById('lps-body'); if(!host) return;
+  const sc = host.querySelector('.table-scroll'), top = sc? sc.scrollTop : 0;
+  host.innerHTML = linkPastSalesBody();
+  const again = host.querySelector('.table-scroll'); if(again) again.scrollTop = top;
+}
+function toggleLinkPastLine(key, on){ if(on) LPS_SKIP.delete(key); else LPS_SKIP.add(key); refreshLinkPastSales(); }
+function toggleLinkPastAll(on){ LPS_SKIP = on? new Set() : new Set(unlinkedSaleLines().map(l=>l.key)); refreshLinkPastSales(); }
+function applyPastSaleLinks(markRest){
+  if(!canManage()) return;
+  /* planned again from the live records, so a sync since the modal opened is respected */
+  const plan = planPastSaleLinks(LPS_SKIP);
+  const lineOf = p => p.legacy ? p.sale : (p.sale.items && p.sale.items[p.idx]);
+  const willLink = plan.some(p=>!p.moving && !p.skipped && p.matched);
+  let linked = 0, moved = 0, marked = 0; const batches = new Set();
+  plan.forEach(p=>{
+    const it = lineOf(p); if(!it) return;
+    if(p.moving){
+      /* a line the till drew moves only to make room for an older sale linked now */
+      /* and never ends up drawing less than the till recorded, which would lift ready stock */
+      if(!willLink || !p.changed || !p.allocs.length || p.short > 0) return;
+      it.allocations = p.allocs.map(a=>Object.assign({}, a));
+      it.batchId = p.allocs[0].batchId; it.batchCode = p.allocs[0].batchCode;
+      p.allocs.forEach(a=>batches.add(a.batchId)); moved++; return;
+    }
+    if(!p.skipped && p.matched){
+      /* an older single-line receipt keeps its shape: the draw sits on the receipt itself,
+         which saleItems() passes through */
+      it.allocations = p.allocs.map(a=>Object.assign({}, a)); it.stockFrom = 'linked';
+      it.batchId = p.allocs[0].batchId; it.batchCode = p.allocs[0].batchCode;
+      p.allocs.forEach(a=>batches.add(a.batchId)); linked++; return;
+    }
+    if(markRest){ it.stockFrom = p.skipped? 'none' : 'unmatched'; marked++; }
+  });
+  if(linked) logActivity(`${CURRENT.name} linked ${linked} past sale line${linked===1?'':'s'} to nursery stock (${batches.size} batch${batches.size===1?'':'es'})${moved? '; '+moved+' later line'+(moved===1?'':'s')+' moved to a newer batch' : ''}.`);
+  if(marked) logActivity(`${CURRENT.name} marked ${marked} past sale line${marked===1?'':'s'} as not from nursery stock.`);
+  if(linked || moved || marked) saveData();
+  closeModal();
+  const v = document.getElementById('view-root').dataset.view;
+  if(v==='seedlingstock') renderSeedlingStock(document.getElementById('view-root')); else if(v==='dashboard') renderDashboard(document.getElementById('view-root'));
+  toast(linked? linked+' past sale line'+(linked===1?'':'s')+' now draw on stock; ready stock is updated.'+(marked? ' '+marked+' marked as not from nursery stock.' : '') : (marked? marked+' line'+(marked===1?'':'s')+' marked as not from nursery stock.' : 'Nothing changed.'));
 }
 /* "from SPN-0725-01 (300), SPN-0725-04 (100)" for a line that drew on nursery stock */
 function saleLineSourceText(it){
@@ -4070,33 +4261,98 @@ function fifoBatches(list){
   const key = r => (computeStage(r).readyDate||'')+'|'+(r.dateSown||'')+'|'+(r.batchCode||'');
   return list.slice().sort((a,b)=>key(a)<key(b)? -1 : (key(a)>key(b)? 1 : 0));
 }
-/* the ready batches a line can draw on: a stock item names its crop and variety; any other
-   text (a price-list product, a typed crop) draws on every ready batch of the crop it names,
-   narrowed to a variety it also names. Kg, pcs and bags are produce, never seedling stock. */
+/* the batches a line can draw on: a stock item names its crop and variety; any other text
+   (a price-list product, a typed crop) draws on every batch of the crop it names, narrowed to
+   a variety it also names. Ready batches come first, then those still hardening. Kg, pcs and
+   bags are produce, never seedling stock. */
 function saleLineCandidates(row){
   if(row.unit!=='seedlings' && row.unit!=='trays') return [];
   const t = String(row.product||'').trim(); if(!t) return [];
-  const ready = readyBatches();
+  const pool = sellableBatches();
   const si = readyStockItems().find(x=>x.name===t);
-  if(si) return fifoBatches(ready.filter(r=>r.crop===si.crop && (r.variety||'')===si.variety));
+  /* the item's crop and variety compared without case, plurals or tags (F1), so a hardening
+     batch written "ZARA F1" still backs a ready "Zara F1" item */
+  const itemKey = x => normCropText(x.crop).trim()+'|'+varietyWords(x.variety).join(' ');
+  if(si){ const k = itemKey(si); return fifoBatches(pool.filter(r=>itemKey(r)===k)); }
   const crop = canonicalCrop(t), lc = t.toLowerCase();
-  const byCrop = ready.filter(r=>lineNamesCrop(lc, crop, r));
-  const byVariety = byCrop.filter(r=>r.variety && lc.includes(String(r.variety).toLowerCase()));
+  const byCrop = pool.filter(r=>lineNamesCrop(lc, crop, r));
+  const byVariety = byCrop.filter(r=>lineNamesVariety(lc, r));
   return fifoBatches(byVariety.length? byVariety : byCrop);
+}
+/* text compared word by word, lower case, plural endings dropped ("Tomatoes" is tomato,
+   "Strawberries" is strawberry), padded with spaces so a term matches whole words only. Then a
+   crop whose name holds another crop's name becomes one word ("tree tomato" is not tomato,
+   "spring onion" is not onion, "hot pepper" is chilli, not capsicum), and a local name becomes
+   the crop it stands for ("sukuma wiki" is kale, "pilipili hoho" is capsicum). */
+const CROP_PHRASES = [
+  ['pepper tree','peppertree'], ['pilipili hoho','capsicum'], ['pili pili hoho','capsicum'], ['sweet pepper','capsicum'], ['bell pepper','capsicum'],
+  ['chilli pepper','chilli'], ['chili pepper','chilli'], ['chilly pepper','chilli'], ['hot pepper','chilli'], ['pepper hot','chilli'], ['cayenne pepper','chilli'],
+  ['cayenne','chilli'], ['habanero','chilli'], ['scotch bonnet','chilli'], ['bird s eye','chilli'], ['bird eye','chilli'], ['piri piri','chilli'],
+  ['chili','chilli'], ['chilly','chilli'], ['chily','chilli'], ['pilipili','chilli'], ['pili pili','chilli'], ['black pepper','blackpepper'],
+  ['tree tomato','treetomato'], ['tamarillo','treetomato'], ['spring onion','springonion'], ['green onion','springonion'], ['sweet potato','sweetpotato'],
+  ['water melon','watermelon'], ['chinese cabbage','chinesecabbage'], ['ethiopian kale','ethiopiankale'], ['kei apple','keiapple'], ['custard apple','custardapple'],
+  ['sukuma wiki','kale'], ['sukuma','kale'], ['collard','kale'], ['egg plant','eggplant'], ['brinjal','eggplant'], ['aubergine','eggplant'],
+  ['butternut squash','butternut'], ['paw paw','pawpaw'],
+];
+function normCropText(t){
+  let T = ' '+String(t||'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim().split(/\s+/)
+    .map(w=> (w.length>4 && /ies$/.test(w)) ? w.slice(0,-3)+'y'
+      : ((w.length>4 && /oes$/.test(w)) ? w.slice(0,-2) : ((w.length>3 && /s$/.test(w) && !/ss$/.test(w)) ? w.slice(0,-1) : w))).join(' ')+' ';
+  CROP_PHRASES.forEach(([from, to])=>{ const f = ' '+from+' '; while(T.includes(f)) T = T.replace(f, ' '+to+' '); });
+  return T;
+}
+/* crops whose names hold another crop's name: a line naming one never draws on the other */
+const DISTINCT_CROP_WORDS = ['treetomato','springonion','chilli','blackpepper','peppertree','sweetpotato','watermelon','chinesecabbage','ethiopiankale','keiapple','custardapple'];
+/* the same crop under another name, and the crop group a crop belongs to ("Brassica" in this
+   nursery means cabbage and kale) */
+const CROP_EQUIVALENTS = [['capsicum','pepper'], ['pawpaw','papaya'], ['courgette','zucchini']];
+const CROP_GROUP = {cabbage:'brassica', kale:'brassica'};
+/* built on first use: COMMON_CROPS is declared further down this script */
+let CROP_WORDS_CACHE = null, COMMON_BY_BASE = null;
+function cropWords(){
+  return CROP_WORDS_CACHE || (CROP_WORDS_CACHE = [...new Set([
+    ...COMMON_CROPS.filter(c=>c!=='Other').map(c=>c.split(' (')[0]), ...CROP_PHRASES.map(p=>p[1]), ...CROP_EQUIVALENTS.flat(),
+    ...Object.keys(CROP_GROUP), 'brassica', 'cauliflower', 'broccoli', 'collard', 'melon', 'pawpaw', 'papaya', 'avocado', 'mango',
+    'passion', 'spinach', 'lettuce', 'courgette', 'zucchini', 'pumpkin', 'squash', 'okra', 'leek', 'beetroot', 'strawberry',
+  ].map(w=>normCropText(w).trim()).filter(Boolean))]);
 }
 /* the names a batch's crop goes by: "Brassica (Cabbage/Kale)" is also cabbage and kale, and
    a plain "Brassica" batch takes the same aliases from the common crop list */
-const reEscape = s => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 function cropTerms(crop){
-  const s = String(crop||''), base = s.split(' (')[0].trim().toLowerCase();
-  const inner = c => ((String(c).match(/\(([^)]*)\)/)||[])[1]||'').split('/').map(x=>x.trim().toLowerCase());
+  const s = String(crop||''), base = normCropText(s.split(' (')[0]).trim(), padded = ' '+base+' ';
+  const inner = c => ((String(c).match(/\(([^)]*)\)/)||[])[1]||'').split('/').map(x=>normCropText(x).trim());
   const terms = new Set([base, ...inner(s)]);
-  const cc = COMMON_CROPS.find(c=>c.split(' (')[0].toLowerCase()===base); if(cc) inner(cc).forEach(x=>terms.add(x));
+  if(!COMMON_BY_BASE) COMMON_BY_BASE = new Map(COMMON_CROPS.map(c=>[normCropText(c.split(' (')[0]).trim(), c]));
+  const cc = COMMON_BY_BASE.get(base); if(cc) inner(cc).forEach(x=>terms.add(x));
+  /* a crop field that also carries the variety ("TOMATO ZARA F1") still names its crop; only
+     its opening words count, so "Chinese Cabbage" never answers to cabbage */
+  cropWords().forEach(w=>{ if(padded.startsWith(' '+w+' ')) terms.add(w); });
+  [...terms].forEach(t=>{ CROP_EQUIVALENTS.forEach(g=>{ if(g.includes(t)) g.forEach(x=>terms.add(x)); }); if(CROP_GROUP[t]) terms.add(CROP_GROUP[t]); });
   terms.delete(''); return [...terms];
 }
-function lineNamesCrop(lc, lineCrop, r){
-  return (lineCrop!=='Other' && canonicalCrop(r.crop)===lineCrop) || cropTerms(r.crop).some(w=>new RegExp('\\b'+reEscape(w)+'\\b').test(lc));
+/* a variety's own words; generic tags (F1, hybrid, OP) are left out, so "Tomato Ansal" names
+   the Ansal F1 batch */
+function varietyWords(v){ return normCropText(v).trim().split(' ').filter(w=>w && !/^(f[1-9]|hybrid|op|opv|seed|seedling|variety)$/.test(w)); }
+/* what a batch answers to, worked out once per batch when many lines are matched */
+function batchNames(r){
+  /* a crop that holds another crop's name counts wherever it is written: "Red Chilli", or crop
+     "Pepper" with variety "Long Red Cayenne", is chilli */
+  const full = normCropText(r.crop+' '+(r.variety||''));
+  return {canon: canonicalCrop(r.crop), terms: cropTerms(r.crop).concat(DISTINCT_CROP_WORDS.filter(w=>full.includes(' '+w+' '))), vwords: varietyWords(r.variety)};
 }
+/* T is a line's normCropText(), lineCrop its canonicalCrop() */
+function textNamesCrop(T, lineCrop, nm){
+  /* "Tree tomato seedlings" never draws on a Tomato batch, nor "Hot pepper" on Capsicum, and
+     a Tree Tomato batch gives only to lines that say tree tomato */
+  if(DISTINCT_CROP_WORDS.some(w=>T.includes(' '+w+' ')!==nm.terms.includes(w))) return false;
+  /* the crop name as a whole word (or misspelt with a trailing e, "Tomatoe"), never inside
+     another word: "Pineapple" is not apple */
+  const c = lineCrop!=='Other' && nm.canon===lineCrop ? normCropText(lineCrop).trim() : '';
+  return (!!c && (T.includes(' '+c+' ') || T.includes(' '+c+'e '))) || nm.terms.some(w=>T.includes(' '+w+' '));
+}
+function textNamesVariety(T, words){ return words.length>0 && words.every(w=>T.includes(' '+w+' ')); }
+function lineNamesCrop(lc, lineCrop, r){ return textNamesCrop(normCropText(lc), lineCrop, batchNames(r)); }
+function lineNamesVariety(lc, r){ return textNamesVariety(normCropText(lc), varietyWords(r.variety)); }
 /* how a line takes its stock: one batch, oldest first across its batches, or not at all */
 function saleLineSource(row){
   const cands = saleLineCandidates(row);
@@ -4132,22 +4388,30 @@ function saleStockLineHTML(row, i){
   if(!src.cands.length){
     const p = String(row.product||'').trim(); if(!p) return '';
     const crop = canonicalCrop(p);
-    return `<div class="cell-sub" style="color:var(--warn);">No ready ${esc(crop!=='Other'? crop : p)} stock: this line will not draw on the nursery</div>`;
+    return `<div class="cell-sub" style="color:var(--warn);">No ${esc(crop!=='Other'? crop : p)} stock ready or hardening: this line will not draw on the nursery</div>`;
   }
   const leftOf = saleDraftLeftBefore(i);
-  const avail = src.mode==='batch' ? leftOf(src.batch) : src.cands.reduce((a,b)=>a+leftOf(b),0);
   const cropOf = src.mode==='batch' ? src.batch.crop : src.cands[0].crop;
   const opts = [`<option value="auto" ${src.mode==='auto'?'selected':''}>Stock, oldest batches first · ${src.cands.reduce((a,b)=>a+leftOf(b),0).toLocaleString()} seedlings</option>`]
-    .concat(src.cands.map(b=>`<option value="${esc(b.id)}" ${src.mode==='batch' && src.batch.id===b.id?'selected':''}>Batch ${esc(b.batchCode)} · ${esc(b.variety||b.crop)} · ${leftOf(b).toLocaleString()} left</option>`))
+    .concat(src.cands.map(b=>{ const c = computeStage(b); return `<option value="${esc(b.id)}" ${src.mode==='batch' && src.batch.id===b.id?'selected':''}>Batch ${esc(b.batchCode)} · ${esc(b.variety||b.crop)} · ${leftOf(b).toLocaleString()} left${c.stage<4? ' · hardening, ready '+esc(fmtDate(c.readyDate)) : ''}</option>`; }))
     .concat([`<option value="none" ${src.mode==='none'?'selected':''}>Not from nursery stock</option>`]);
   const need = saleRowSeedlings(row);
   return `<div class="cell-sub" style="margin-top:4px;"><select style="font-size:11.5px;padding:3px 6px;max-width:100%;" title="Where this line's seedlings come from" onchange="updSaleRow(${i},'source',this.value)">${opts.join('')}</select>
-    <div id="sale-stock-note-${i}">${saleStockNote(src, need, avail, cropOf)}</div></div>`;
+    <div id="sale-stock-note-${i}">${saleStockNote(src, need, saleLineAvail(src, leftOf), cropOf)}</div></div>`;
 }
-function saleStockNote(src, need, avail, crop){
+/* what a line's batches hold for it once the lines above have taken theirs, how much of that
+   is ready now (the rest is hardening), and when the first hardening batch turns ready */
+function saleLineAvail(src, leftOf){
+  const list = src.mode==='batch' ? [src.batch] : src.cands;
+  const hardening = list.filter(b=>computeStage(b).stage<4 && leftOf(b)>0);
+  return { avail: list.reduce((a,b)=>a+leftOf(b),0), ready: list.filter(b=>computeStage(b).stage===4).reduce((a,b)=>a+leftOf(b),0),
+    readyOn: hardening.length? computeStage(hardening[0]).readyDate : '' };
+}
+function saleStockNote(src, need, av, crop){
   if(src.mode==='none') return '<span class="small-muted">Does not draw on the nursery</span>';
-  if(need > avail) return `<span style="color:var(--danger);">Needs ${need.toLocaleString()} seedlings; only ${avail.toLocaleString()} in ready stock</span>`;
-  return `<span class="small-muted">${traysOfLabel(crop, avail)} available${need? ' · '+(avail-need).toLocaleString()+' left after this line' : ''}</span>`;
+  if(need > av.avail) return `<span style="color:var(--danger);">Needs ${need.toLocaleString()} seedlings; only ${av.avail.toLocaleString()} in ${av.avail>av.ready? 'ready and hardening' : 'ready'} stock</span>`;
+  const early = Math.max(0, need - av.ready);
+  return `<span class="small-muted">${traysOfLabel(crop, av.avail)} available${need? ' · '+(av.avail-need).toLocaleString()+' left after this line' : ''}</span>${early? `<div style="color:var(--warn);">${early.toLocaleString()} of these come from a batch still hardening (ready ${esc(fmtDate(av.readyOn))})</div>` : ''}`;
 }
 function renderSaleItems(){ return withSoldCache(renderSaleItemsNow); }
 function renderSaleItemsNow(){
@@ -4215,14 +4479,9 @@ function updSaleRowNow(i, f, v){
   const host = document.getElementById('sale-items'); const tr = host && host.querySelectorAll('tbody tr')[i];
   if(tr) tr.children[5].textContent = money(Math.round((+row.qty||0)*(+row.unitPrice||0)));
   const tot = document.getElementById('sale-total'); if(tot) tot.textContent = money(saleDraftTotal());
-  /* the stock notes follow the quantity as it is typed; a line changes what the lines after it can draw */
-  SALE_DRAFT.forEach((rw, j)=>{
-    const note = document.getElementById('sale-stock-note-'+j); if(!note) return;
-    const src = saleLineSource(rw); if(!src.cands.length) return;
-    const leftOf = saleDraftLeftBefore(j);
-    const avail = src.mode==='batch' ? leftOf(src.batch) : src.cands.reduce((a,b)=>a+leftOf(b),0);
-    note.innerHTML = saleStockNote(src, saleRowSeedlings(rw), avail, src.mode==='batch'? src.batch.crop : src.cands[0].crop);
-  });
+  /* the stock boxes follow the quantity as it is typed; a line changes what the lines after it
+     can draw (the field being typed in sits outside them, so it keeps the caret) */
+  refreshSaleStockLines();
 }
 /* redraw only the stock boxes under the item fields */
 function refreshSaleStockLines(){ withSoldCache(()=>SALE_DRAFT.forEach((rw, j)=>{ const box = document.getElementById('sale-stock-line-'+j); if(box) box.innerHTML = saleStockLineHTML(rw, j); })); }
@@ -4274,7 +4533,7 @@ function openSaleModal(batchId){
           left.set(src.batch.id, leftOf(src.batch) - need);
         } else if(src.mode==='auto'){
           const avail = src.cands.reduce((a,b)=>a+leftOf(b),0);
-          if(need > avail){ toast(`Only ${avail.toLocaleString()} seedlings of ${r.product.trim()} are in ready stock. Lower the quantity, or set the line to "Not from nursery stock" if they come from elsewhere.`,'err'); return; }
+          if(need > avail){ toast(`Only ${avail.toLocaleString()} seedlings of ${r.product.trim()} are in ready or hardening stock. Lower the quantity, or set the line to "Not from nursery stock" if they come from elsewhere.`,'err'); return; }
           let rest = need;
           for(const b of src.cands){
             if(rest<=0) break;
@@ -4293,6 +4552,9 @@ function openSaleModal(batchId){
           unitPrice:+r.unitPrice||0, total: Math.round((+r.qty||0)*(+r.unitPrice||0)), batchId: first? first.batchId : null, batchCode: first? first.batchCode : null };
         /* the batches this line drew on (stock is the batch's growth less these) */
         if(allocs.length){ it.allocations = allocs; it.stockFrom = mode; }
+        /* a seedling line that drew nothing says why, so it is never offered for linking later:
+           kept off nursery stock (bought in), or sold with no batch of the crop ready or hardening */
+        else if(r.unit==='seedlings' || r.unit==='trays') it.stockFrom = r.source==='none' ? 'none' : 'nostock';
         return it;
       });
       const total = items.reduce((a,it)=>a+it.total,0);
@@ -4914,7 +5176,7 @@ function shareCustomSowingReceipt(id, kind){
     <p class="small-muted" style="margin:0 0 12px;">${esc(o.farmerName)} · <b>${money(kind==='Balance'? o.balanceAmount : o.depositAmount)}</b></p>
     <div style="display:flex;gap:8px;flex-wrap:wrap;">
       <button class="btn sm leaf" onclick="whatsappCustomSowingReceipt(${jsArg(o.id)},${jsArg(kind)})">WhatsApp (PDF)</button>
-      <button class="btn sm secondary" onclick="downloadCustomSowingReceipt(${jsArg(o.id)},${jsArg(kind)})">${SPN_CONFIG.mobile? 'Share PDF…' : 'Download PDF'}</button>
+      <button class="btn sm secondary" onclick="downloadCustomSowingReceipt(${jsArg(o.id)},${jsArg(kind)})">Download PDF</button>
     </div>
     <small class="small-muted" style="display:block;margin-top:10px;">${receiptShareHint()}</small>
   `, [{label:'Done', cls:'secondary', action:closeModal}]);
@@ -5670,7 +5932,7 @@ function clientStatement(id, fmt){
     doc.save(`SPN_Statement_${c.name.replace(/[^A-Za-z0-9]+/g,'_')}_${Date.now()}.pdf`);
   }
   logActivity(`Generated a ${fmt==='pdf'?'PDF':'Excel'} statement for ${c.name} (${fmtDate(from)} to ${fmtDate(to)}).`);
-  toast('Statement generated - check your downloads.');
+  if(!SPN_CONFIG.mobile) toast('Statement generated - check your downloads.'); /* the app shows its own Download complete bar */
 }
 function renderCashSalesAnalysis(){
   const el = document.getElementById('cash-sales-analysis');
@@ -7116,13 +7378,19 @@ function renderSeedlingStock(root){
   const rows = DATA.sowingRecords.map(r=>{
     const c = computeStage(r);
     const viableQty = batchRemaining(r); /* viable seedlings still in the nursery (sales and closed batches deducted) */
-    return {id:r.id, r, c, viableQty};
+    /* a batch with nothing left says so instead of "Ready for Sale" with 0 seedlings */
+    const gone = r.closed ? 'Closed' : (viableQty===0 && batchViable(r)>0 ? 'Sold out' : '');
+    return {id:r.id, r, c, viableQty, gone};
   });
   const readyRows = rows.filter(x=>x.c.stage===4 && x.viableQty>0);
   const readyTotal = readyRows.reduce((a,b)=>a+b.viableQty,0);
   root.innerHTML = `
   <div class="view-header"><div><h2>Seedling Stock</h2><p>Greenhouse inventory computed live from Sowing Data Entry - every batch sown appears here automatically as it grows. Quantities are shown in trays, with the seedling count beneath. ${trayBasisNote()}</p></div>
-  <button class="btn secondary" onclick="nav('sowing')">+ Record a new sowing to add stock</button></div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;">${canManage()? '<button class="btn secondary" onclick="openLinkPastSalesModal()" title="Check that every past seedling and tray sale has come out of a batch">Link past sales to stock</button>' : ''}<button class="btn secondary" onclick="nav('sowing')">+ Record a new sowing to add stock</button></div></div>
+  ${(()=>{ const n = unlinkedSaleLines().length; return n? `<div class="card" style="margin-bottom:14px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:12px 16px;border-left:4px solid var(--warn);">
+    <div style="flex:1;min-width:220px;font-size:12.8px;"><b>${n} past sale line${n===1?'':'s'} not deducted from stock.</b> ${n===1?'It was':'They were'} recorded without taking seedlings out of a batch, so the ready figures below are higher than what is really in the nursery.</div>
+    ${canManage()? '<button class="btn sm leaf" onclick="openLinkPastSalesModal()">Link past sales to stock</button>' : '<span class="small-muted">An Admin or the Super User can link them.</span>'}
+  </div>` : ''; })()}
   <div class="grid cols-3" style="margin-bottom:16px;">
     ${(()=>{
       const t = stockTrays(readyRows);
@@ -7150,14 +7418,14 @@ function renderSeedlingStock(root){
       {key:'sown', label:'Seeds Sown', align:'right', val:x=>+x.r.qty||0, html:x=>`<span class="mono">${(+x.r.qty||0).toLocaleString()}</span>`},
       {key:'viable', label:'Est. Viable Trays', align:'right', val:x=>trayCountOf(x.r.crop, x.viableQty), html:x=>{ const t=trayCountOf(x.r.crop, x.viableQty); return `<b class="mono">${t? '≈ '+t.toLocaleString() : (x.viableQty? '< 1' : '0')}</b><div class="cell-sub">${x.viableQty.toLocaleString()} seedlings</div>`; }},
       {key:'readyDate', label:'Ready Date', val:x=>x.c.readyDate, html:x=>fmtDate(x.c.readyDate)},
-      {key:'ready', label:'Countdown', val:x=>x.c.stage===4? -1 : x.c.daysLeft, html:x=>x.c.stage<4? st(x.c.daysLeft<=3?'gold':'slate', x.c.daysLeft+' day(s) left') : st('green','Ready now')},
+      {key:'ready', label:'Countdown', val:x=>x.gone? 1e6 : (x.c.stage===4? -1 : x.c.daysLeft), html:x=>x.gone? st('slate', x.gone) : (x.c.stage<4? st(x.c.daysLeft<=3?'gold':'slate', x.c.daysLeft+' day(s) left') : st('green','Ready now'))},
       {key:'growth', label:'Growth', val:x=>x.c.pct, html:x=>`<div class="progress-line" style="width:90px;"><i style="width:${x.c.pct}%;"></i></div><div class="cell-sub mono">${x.c.pct}%</div>`},
-      {key:'status', label:'Status', val:x=>x.c.stage, html:x=>stockStatusBadge(STAGES[x.c.stage-1])},
+      {key:'status', label:'Status', val:x=>x.gone? 9 : x.c.stage, html:x=>x.gone? st('slate', x.gone) : stockStatusBadge(STAGES[x.c.stage-1])},
     ],
     rowMenu: x=>[
       {label:'Open batch details', run:()=>openBatchDrawer(x.id)},
       ...(x.c.stage===4 && batchRemaining(x.r)>0 ? [{label:'Sell from this batch', run:()=>{ if(CURRENT.access.includes('cashsale')){ nav('cashsale'); openSaleModal(x.r.id); } else toast('You do not have POS access.','err'); }}] : []),
-      {label: x.r.closed? 'Reopen batch' : 'Mark sold out / transplanted', run:()=>{ x.r.closed = !x.r.closed; logActivity(`${x.r.closed? 'Closed' : 'Reopened'} seedling batch ${x.r.batchCode} (${x.r.crop} ${x.r.variety}).`); saveData(); renderSeedlingStock(document.getElementById('view-root')); toast(x.r.closed? 'Batch closed; it no longer counts as stock.' : 'Batch reopened.'); }},
+      {label: x.r.closed? 'Reopen batch' : 'Mark sold out / transplanted', run:()=>{ x.r.closed = !x.r.closed; if(x.r.closed) x.r.closedAt = todayISO(); else delete x.r.closedAt; logActivity(`${x.r.closed? 'Closed' : 'Reopened'} seedling batch ${x.r.batchCode} (${x.r.crop} ${x.r.variety}).`); saveData(); renderSeedlingStock(document.getElementById('view-root')); toast(x.r.closed? 'Batch closed; it no longer counts as stock.' : 'Batch reopened.'); }},
     ],
   })}
   `;
@@ -7476,7 +7744,9 @@ async function openStaffDocument(staffId){
     if(blob.type.startsWith('image/')){
       openModal('ID copy · '+esc(s.name), `<img src="${url}" alt="ID copy" style="max-width:100%;border-radius:8px;display:block;">`, [{label:'Close', cls:'secondary', action:()=>{ closeModal(); URL.revokeObjectURL(url); }}]);
     } else {
-      const a = document.createElement('a'); a.href = url; a.download = 'ID-'+String(s.name||'staff').replace(/[^A-Za-z0-9]+/g,'_')+'.pdf'; document.body.appendChild(a); a.click(); a.remove();
+      /* an ID copy is personal data: in the SPN OS app it opens in the share sheet rather than
+         being saved to the phone's shared Downloads folder */
+      const a = document.createElement('a'); a.href = url; a.download = 'ID-'+String(s.name||'staff').replace(/[^A-Za-z0-9]+/g,'_')+'.pdf'; a.setAttribute('data-spn-private', '1'); document.body.appendChild(a); a.click(); a.remove();
       setTimeout(()=>URL.revokeObjectURL(url), 60000);
     }
   }catch(e){ toast(e.message||'Could not open the document','err'); }
@@ -10852,7 +11122,7 @@ function generateReport(key, fmt){
     doc.save(`SPN_${key}_report_${Date.now()}.pdf`);
   }
   logActivity(`Generated the ${rep.title} (${fmt==='pdf'?'PDF':'Excel'}).`);
-  toast('Report generated - check your downloads.');
+  if(!SPN_CONFIG.mobile) toast('Report generated - check your downloads.'); /* the app shows its own Download complete bar */
 }
 
 /* ================= USERS & ACCESS ================= */
@@ -11419,29 +11689,34 @@ function openRecomputeTraysModal(){
   ]);
   window.__rtRows = rowsHTML;
 }
+/* the batches a line drew on follow a change in its seedling count: extra seedlings come from
+   its batches that still have stock, oldest first (anything beyond that stays on the last one,
+   where stock floors at zero); a reduction goes back newest first */
+function adjustAllocations(al, delta){
+  if(delta > 0){
+    let rest = delta;
+    for(const x of al){ if(rest<=0) break; const bt = DATA.sowingRecords.find(r=>r.id===x.batchId); const take = Math.min(rest, bt? batchRemaining(bt) : 0); if(take>0){ x.seedlings = (+x.seedlings||0) + take; rest -= take; } }
+    if(rest>0) al[al.length-1].seedlings = (+al[al.length-1].seedlings||0) + rest;
+  } else if(delta < 0){
+    let rest = -delta;
+    for(let k=al.length-1; k>=0 && rest>0; k--){ const take = Math.min(rest, +al[k].seedlings||0); al[k].seedlings = (+al[k].seedlings||0) - take; rest -= take; }
+  }
+}
 function applyRecomputeTrays(lines, target){
   if(!confirm('Recompute the seedling equivalents on '+lines.length+' past tray line'+(lines.length===1?'':'s')+'? Stock figures for their batches will change; prices and totals will not.')) return;
   let batches = new Set();
   lines.forEach(l=>{
     const t = target(l);
-    if(l.legacy){ l.sale.traySize = t; }
+    if(l.legacy){
+      /* an older single-line receipt linked to stock later carries its draws on the receipt */
+      const oldS = itemSeedlings(saleItems(l.sale)[0]);
+      l.sale.traySize = t;
+      if(Array.isArray(l.sale.allocations) && l.sale.allocations.length) adjustAllocations(l.sale.allocations, Math.round(itemSeedlings(saleItems(l.sale)[0]) - oldS));
+    }
     else {
       const it = l.sale.items[l.idx]; const oldS = itemSeedlings(it);
       it.traySize = t; it.seedlings = l.qty * t;
-      /* the batches the line drew on follow the recomputed count: extra seedlings come from
-         its batches that still have stock, oldest first (anything beyond that stays on the
-         last one, where stock floors at zero); a reduction goes back newest first */
-      if(Array.isArray(it.allocations) && it.allocations.length){
-        const al = it.allocations, delta = Math.round(it.seedlings - oldS);
-        if(delta > 0){
-          let rest = delta;
-          for(const x of al){ if(rest<=0) break; const bt = DATA.sowingRecords.find(r=>r.id===x.batchId); const take = Math.min(rest, bt? batchRemaining(bt) : 0); if(take>0){ x.seedlings = (+x.seedlings||0) + take; rest -= take; } }
-          if(rest>0) al[al.length-1].seedlings = (+al[al.length-1].seedlings||0) + rest;
-        } else if(delta < 0){
-          let rest = -delta;
-          for(let k=al.length-1; k>=0 && rest>0; k--){ const take = Math.min(rest, +al[k].seedlings||0); al[k].seedlings = (+al[k].seedlings||0) - take; rest -= take; }
-        }
-      }
+      if(Array.isArray(it.allocations) && it.allocations.length) adjustAllocations(it.allocations, Math.round(it.seedlings - oldS));
     }
     /* a multi-item receipt keeps its seedling total in qty; on a legacy single-line receipt
        qty IS the tray count and must stay as it is */
@@ -12299,8 +12574,11 @@ async function downloadBackup(){
   let dump = buildBackup();
   if(SERVER_MODE && !OFFLINE){ try{ dump = await API.req('backup'); }catch(e){} } /* the server copy is authoritative when reachable */
   const blob = new Blob([JSON.stringify(dump, null, 1)], {type:'application/json'});
-  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'SPN-Backup-'+todayISO()+'.json';
+  /* the whole workspace (people, staff records): in the SPN OS app it goes to the share sheet
+     (Drive, email) rather than the phone's shared Downloads folder */
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'SPN-Backup-'+todayISO()+'.json'; a.setAttribute('data-spn-private', '1');
   document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(a.href), 60000);
   logActivity('Downloaded a workspace backup.'); saveData();
 }
 function openEmailBackupModal(){

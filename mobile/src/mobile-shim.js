@@ -1,9 +1,10 @@
 /* SPN OS mobile shim. Appended to the web app by scripts/build-www.mjs and only
    active inside the Capacitor app (it does nothing in a normal browser).
    - hardware Back: close overlays, step back through modules, then background the app
-   - downloads: the WebView cannot save blob: URLs, so PDF/Excel exports are written
-     to the app cache and handed to the Android share sheet (save to Drive, WhatsApp,
-     print, ...)
+   - downloads: the WebView cannot save blob: URLs, so PDF/Excel exports are saved to
+     Downloads/SPN OS by the native SpnDownloads plugin, with a "Download complete"
+     notification in the notification bar and an Open / Share bar in the app
+   - sharing (WhatsApp receipts): the file goes to the Android share sheet
    - external links open in the system browser instead of inside the app */
 (function(){
   const cap = window.Capacitor;
@@ -48,9 +49,71 @@
     const o = opts || {};
     const req = { title: safe, url: w.uri, dialogTitle: o.dialogTitle || ('Save or share ' + safe) };
     if(o.text) req.text = String(o.text);
-    await P.Share.share(req);
+    /* closing the share sheet is not an error */
+    try{ await P.Share.share(req); }catch(e){ if(/cancel/i.test(String((e && e.message) || e))) return; throw e; }
   }
-  window.SPN_MOBILE = { shareBlob: shareBlob, platform: cap.getPlatform ? cap.getPlatform() : 'android' };
+  /* 3) downloads: saved to Downloads/SPN OS with a "Download complete" notification (tap opens
+     the file) and the same news in the app, with Open and Share. A build without the native
+     plugin falls back to the share sheet. */
+  var MIME = { pdf: 'application/pdf', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', xls: 'application/vnd.ms-excel', csv: 'text/csv', json: 'application/json', txt: 'text/plain', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp' };
+  function mimeFor(name, blob){
+    var ext = String(name || '').split('.').pop().toLowerCase();
+    return MIME[ext] || (blob && blob.type) || 'application/octet-stream';
+  }
+  function blobToB64(blob){
+    return new Promise(function(res, rej){ var fr = new FileReader(); fr.onload = function(){ res(String(fr.result).split(',')[1]); }; fr.onerror = rej; fr.readAsDataURL(blob); });
+  }
+  var askedNotif = false;
+  async function ensureNotifPermission(){
+    if(askedNotif || !P.LocalNotifications) return;
+    askedNotif = true;
+    try{ var p = await P.LocalNotifications.checkPermissions(); if(p.display !== 'granted' && p.display !== 'denied') await P.LocalNotifications.requestPermissions(); }catch(e){}
+  }
+  async function saveBlob(blob, filename){
+    var DL = P.SpnDownloads;
+    var name = String(filename || 'file').replace(/[\\\/:*?"<>|]+/g, '_');
+    if(!DL || !DL.save){ try{ return await shareBlob(blob, name); }catch(e){ showDownloadBar(null, (e && e.message) || 'Sharing failed'); return; } }
+    var mime = mimeFor(name, blob);
+    try{
+      await ensureNotifPermission();
+      var r = await DL.save({ data: await blobToB64(blob), filename: name, mimeType: mime });
+      showDownloadBar(r);
+      return r;
+    }catch(e){
+      /* not saved: offer the share sheet instead so the file is never lost */
+      showDownloadBar(null, (e && e.message) || 'The file could not be saved');
+      try{ await shareBlob(blob, name); }catch(e2){}
+    }
+  }
+  /* the in-app half of "Download complete": file name, where it went, Open and Share */
+  function showDownloadBar(r, error){
+    var old = document.getElementById('spn-dl-bar'); if(old) old.remove();
+    var bar = document.createElement('div');
+    bar.id = 'spn-dl-bar';
+    bar.setAttribute('role', 'status');
+    bar.style.cssText = 'position:fixed;left:12px;right:12px;bottom:calc(14px + env(safe-area-inset-bottom, 0px));z-index:2147483000;background:var(--surface,#fff);color:var(--ink,#242B22);border:1px solid var(--line,#E2E7DF);border-radius:14px;box-shadow:0 10px 30px rgba(0,0,0,.22);padding:12px 14px;display:flex;align-items:center;gap:12px;font:13px/1.35 Inter,system-ui,sans-serif;max-width:560px;margin:0 auto;';
+    var esc = function(t){ return String(t == null ? '' : t).replace(/[&<>"']/g, function(c){ return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]; }); };
+    var btn = 'border:none;background:var(--mint,#E3EEDA);color:var(--forest,#315C3A);font-weight:600;border-radius:9px;padding:7px 12px;font-size:12.5px;';
+    var closeBtn = '<button type="button" data-a="close" aria-label="Dismiss" style="border:none;background:none;color:inherit;opacity:.6;font-size:20px;line-height:1;padding:4px 2px 4px 6px;">&times;</button>';
+    if(error){
+      bar.innerHTML = '<div style="flex:1;min-width:0;"><b>Download not saved</b><div style="opacity:.75;font-size:12px;">' + esc(error) + '. Opening the share sheet instead.</div></div>' + closeBtn;
+    } else {
+      bar.innerHTML = '<div style="width:34px;height:34px;border-radius:10px;background:var(--mint,#E3EEDA);color:var(--forest,#315C3A);display:flex;align-items:center;justify-content:center;flex:none;"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg></div>'
+        + '<div style="flex:1;min-width:0;"><b>Download complete</b><div style="opacity:.75;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + esc(r.name) + ' · ' + esc(r.location || 'Downloads') + '</div></div>'
+        + '<button type="button" data-a="open" style="' + btn + '">Open</button><button type="button" data-a="share" style="' + btn + '">Share</button>' + closeBtn;
+      bar.querySelector('[data-a="open"]').onclick = function(){ P.SpnDownloads.open({ uri: r.uri, mimeType: r.mimeType }).catch(function(e){ if(typeof toast === 'function') toast((e && e.message) || 'Could not open the file', 'err'); }); bar.remove(); };
+      bar.querySelector('[data-a="share"]').onclick = function(){ P.SpnDownloads.share({ uri: r.uri, mimeType: r.mimeType, name: r.name }).catch(function(){}); bar.remove(); };
+    }
+    var cl = bar.querySelector('[data-a="close"]'); if(cl) cl.onclick = function(){ bar.remove(); };
+    document.body.appendChild(bar);
+    /* sit above a dialog's Save / Close bar rather than over its buttons */
+    try{
+      var foot = Array.prototype.slice.call(document.querySelectorAll('#active-modal .modal-foot, .drawer .drawer-foot')).filter(function(fo){ var fr = fo.getBoundingClientRect(); return fr.height > 0 && fr.top < window.innerHeight; }).pop();
+      if(foot){ var ft = foot.getBoundingClientRect().top; if(bar.getBoundingClientRect().bottom > ft) bar.style.bottom = Math.max(14, window.innerHeight - ft + 8) + 'px'; }
+    }catch(e){}
+    setTimeout(function(){ if(bar.parentNode) bar.remove(); }, error ? 6000 : 9000);
+  }
+  window.SPN_MOBILE = { shareBlob: shareBlob, saveBlob: saveBlob, platform: cap.getPlatform ? cap.getPlatform() : 'android' };
 
   /* 3a) the field being typed in stays visible above the keyboard (the app shrinks when the
      keyboard opens; this brings the focused field back into view once it has) */
@@ -142,7 +205,7 @@
       if(J && J.API && !J.API.__spnHooked){
         const origSave = J.API.save;
         J.API.save = function(name){
-          try{ shareBlob(this.output('blob'), name || 'document.pdf'); return this; }
+          try{ saveBlob(this.output('blob'), name || 'document.pdf').catch(function(){}); return this; }
           catch(e){ return origSave.apply(this, arguments); }
         };
         J.API.__spnHooked = true;
@@ -154,7 +217,7 @@
         window.XLSX.writeFile = function(wb, name, opts){
           try{
             const ab = window.XLSX.write(wb, Object.assign({ bookType: 'xlsx', type: 'array' }, opts || {}));
-            shareBlob(new Blob([ab], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), name || 'sheet.xlsx');
+            saveBlob(new Blob([ab], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), name || 'sheet.xlsx').catch(function(){});
           }catch(e){ return origWrite.apply(this, arguments); }
         };
         window.XLSX.__spnHooked = true;
@@ -171,7 +234,11 @@
     const href = a.getAttribute('href') || '';
     if(!/^(blob:|data:)/.test(href)) return;
     e.preventDefault();
-    try{ const blob = await (await fetch(href)).blob(); shareBlob(blob, a.getAttribute('download') || 'file'); }catch(err){}
+    /* private documents (staff ID copies) stay out of the shared Downloads folder: share sheet only */
+    try{
+      const blob = await (await fetch(href)).blob();
+      await (a.hasAttribute('data-spn-private') ? shareBlob : saveBlob)(blob, a.getAttribute('download') || 'file');
+    }catch(err){ if(typeof toast === 'function') toast('Could not open the file', 'err'); }
   }, true);
 
   /* external links (maps, APK downloads): Capacitor already opens target="_blank"
