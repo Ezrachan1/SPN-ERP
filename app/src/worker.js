@@ -126,6 +126,7 @@ const COLLECTIONS = [
   'salesHistory', 'priceHistory', 'companyKraPin', 'leadsMonthlyTarget', 'org',
   'dailyExpenses', 'accuWeatherApiKey', 'googleMapsApiKey',
   'plotActivities', 'customSowingRates', 'customSowingOrders', 'messages', 'livestockHealthTasks', 'livestockProducts',
+  'seedlingBookings',
 ];
 /* settings every device reads but only admins may write (see the collections PUT route) */
 /* settings: custom sowing rates price every order, and the livestock rotation plan decides
@@ -137,6 +138,7 @@ const OPERATIONAL = [
   'accessRequests', 'aiScans', 'activityStats', 'salesHistory', 'priceHistory',
   'dailyExpenses',
   'plotActivities', 'customSowingOrders', 'messages', 'livestockHealthTasks',
+  'seedlingBookings',
 ];
 
 let schemaReady = false;
